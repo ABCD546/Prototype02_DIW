@@ -133,7 +133,7 @@ export default function InteractiveMap({
               value={checkpointDateTime}
               onChange={(e) => onCheckpointDateTimeChange(e.target.value)}
               min="2015-01-01T00:00"
-              max="2023-12-31T23:59"
+              max="2024-12-31T23:59"
               className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-mono"
             />
           </label>

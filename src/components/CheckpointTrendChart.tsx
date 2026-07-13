@@ -207,13 +207,13 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
             <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">ช่วงวันที่</label>
             <div className="flex items-center gap-1.5">
               <input
-                type="date" value={startDate} min="2015-01-01" max="2023-12-31"
+                type="date" value={startDate} min="2015-01-01" max="2024-12-31"
                 onChange={(e) => setStartDate(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-mono"
               />
               <span className="text-slate-400 text-xs">–</span>
               <input
-                type="date" value={endDate} min="2015-01-01" max="2023-12-31"
+                type="date" value={endDate} min="2015-01-01" max="2024-12-31"
                 onChange={(e) => setEndDate(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-mono"
               />
@@ -288,7 +288,7 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
           )}
 
           <p className="text-[10px] text-slate-400 leading-tight mt-3">
-            * เส้นประสีคือเกณฑ์มาตรฐานคุณภาพน้ำ ลากเมาส์บนกราฟเพื่อดูค่า ณ เวลานั้นๆ ข้อมูลบันทึกทุก 30 นาที ตั้งแต่ปี 2558-2566 (ช่องที่ไม่มีข้อมูลจะถูกข้ามไป)
+            * เส้นประสีคือเกณฑ์มาตรฐานคุณภาพน้ำ ลากเมาส์บนกราฟเพื่อดูค่า ณ เวลานั้นๆ ข้อมูลบันทึกทุก 30 นาที ตั้งแต่ปี 2558 เป็นต้นไป (สถานีส่วนใหญ่ถึงปี 2566 ยกเว้นกระทุ่มแบนที่มีข้อมูลถึงปี 2567 แต่ไม่มีข้อมูลปี 2563) (ช่องที่ไม่มีข้อมูลจะถูกข้ามไป)
           </p>
         </div>
       </div>
