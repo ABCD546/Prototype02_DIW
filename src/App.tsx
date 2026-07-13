@@ -205,15 +205,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-3 text-xs w-full sm:w-auto items-center shrink-0">
-            {/* Quick status indicators aligned with Professional Polish template */}
-            <span className="bg-green-500/20 text-green-400 px-3 py-1.5 rounded border border-green-500/30 font-mono uppercase tracking-wider text-[10px] text-center w-full sm:w-auto font-bold">
-              ระบบออนไลน์: ตรวจค่าตามเวลาจริง
-            </span>
-            <span className="text-slate-400 font-mono text-[11px] shrink-0 font-bold">
-              2569 THA CHIN ZONE
-            </span>
-          </div>
+          
         </div>
       </header>
 
