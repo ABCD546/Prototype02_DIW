@@ -20,15 +20,19 @@ export interface Factory {
 }
 
 export interface Checkpoint {
-  id: string;
-  name: string;
+  id: string;   // station name used as id, e.g. 'สองพี่น้อง'
+  name: string; // display name of the station
   lat: number;
   lon: number;
-  bod: number; // mg/L
-  cod: number; // mg/L
-  fecalColiform: number; // MPN/100ml
-  nitrogen: number; // mg/L
-  ec: number; // uS/cm
+}
+
+// One row of historical data read from a station's CSV file.
+// `values` holds whatever columns exist in that station's file
+// (e.g. pH, DO, EC, Temp for some stations; BOD, COD, ... for others).
+// Missing/blank cells in the source file are stored as null.
+export interface CheckpointReading {
+  timestamp: string; // raw date-time string from the file, e.g. "4/2/2023 9:00"
+  values: Record<string, number | null>;
 }
 
 export interface Scenario {

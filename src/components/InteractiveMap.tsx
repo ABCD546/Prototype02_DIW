@@ -4,9 +4,9 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Factory, Checkpoint } from '../types';
+import { Factory, Checkpoint, CheckpointReading } from '../types';
 import { DIW_STANDARDS } from '../data';
-import { calculateSourceAttribution } from '../utils';
+import { evaluateCheckpointReading } from '../checkpointData';
 import { 
   Info, 
   HelpCircle, 
@@ -15,12 +15,7 @@ import {
   Factory as FactoryIcon, 
   MapPin, 
   Compass,
-  AlertTriangle,
-  Users,
-  Sprout,
-  FlameKindling,
-  ClipboardList,
-  AlertCircle,
+  Calendar,
   Settings,
   ChevronDown,
   ChevronUp,
@@ -30,6 +25,9 @@ import {
 interface InteractiveMapProps {
   factories: Factory[];
   checkpoints: Checkpoint[];
+  checkpointReadings: Record<string, CheckpointReading | null>;
+  checkpointDateTime: string;
+  onCheckpointDateTimeChange: (val: string) => void;
   selectedId: string | null;
   onSelectEntity: (id: string, type: 'factory' | 'checkpoint') => void;
   onFactoryParamChange: (factoryId: string, param: 'dischargeBOD' | 'dischargeCOD' | 'actualQ', val: number) => void;
@@ -38,13 +36,15 @@ interface InteractiveMapProps {
 export default function InteractiveMap({
   factories,
   checkpoints,
+  checkpointReadings,
+  checkpointDateTime,
+  onCheckpointDateTimeChange,
   selectedId,
   onSelectEntity,
   onFactoryParamChange,
 }: InteractiveMapProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [isMapReady, setIsMapReady] = useState(false);
-  const [cpTab, setCpTab] = useState<'stats' | 'risk'>('stats');
   // เริ่มต้นซ่อนแผงข้อมูลด้านขวาบนจอมือถือ (กว้างน้อยกว่า 768px) กันบังแผนที่ทั้งจอ — จอใหญ่ยังคงเปิดตามเดิม
   const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
     typeof window === 'undefined' ? true : window.innerWidth >= 768
@@ -53,23 +53,13 @@ export default function InteractiveMap({
 
   const selectedFactory   = factories.find((f) => f.id === selectedId);
   const selectedCheckpoint = checkpoints.find((cp) => cp.id === selectedId);
+  const selectedCheckpointReading = selectedCheckpoint ? checkpointReadings[selectedCheckpoint.id] : null;
+  const selectedCheckpointEval = selectedCheckpoint
+    ? evaluateCheckpointReading(selectedCheckpoint.id, selectedCheckpointReading)
+    : null;
 
-  // นับจำนวนพารามิเตอร์ที่เกินมาตรฐานของจุดตรวจที่เลือก: 1 ค่า = เฝ้าระวัง (เหลือง), 2 ค่าขึ้นไป = วิกฤต (แดง)
-  const cpViolationFlags = selectedCheckpoint ? {
-    bod: selectedCheckpoint.bod > DIW_STANDARDS.RIVER_BOD_MAX,
-    cod: selectedCheckpoint.cod > DIW_STANDARDS.RIVER_COD_MAX,
-    fecal: selectedCheckpoint.fecalColiform > DIW_STANDARDS.RIVER_FECAL_MAX,
-    nitrogen: selectedCheckpoint.nitrogen > DIW_STANDARDS.RIVER_NITROGEN_MAX,
-  } : null;
-  const cpViolationCount = cpViolationFlags
-    ? Object.values(cpViolationFlags).filter(Boolean).length
-    : 0;
-  const cpRiskLevel: 'safe' | 'warning' | 'critical' =
-    cpViolationCount >= 2 ? 'critical' : cpViolationCount === 1 ? 'warning' : 'safe';
-
-  // Reset tab เมื่อเปลี่ยน entity
+  // Reset what-if panel เมื่อเปลี่ยน entity
   useEffect(() => {
-    setCpTab('stats');
     setIsWhatIfOpen(false);
   }, [selectedId]);
 
@@ -108,13 +98,18 @@ export default function InteractiveMap({
   useEffect(() => {
     if (!isMapReady || !iframeRef.current?.contentWindow) return;
 
+    const checkpointsWithStatus = checkpoints.map((cp) => ({
+      ...cp,
+      isViolating: evaluateCheckpointReading(cp.id, checkpointReadings[cp.id]).isViolating,
+    }));
+
     iframeRef.current.contentWindow.postMessage({
       type: 'UPDATE_MARKERS',
       factories,
-      checkpoints,
+      checkpoints: checkpointsWithStatus,
       selectedId,
     }, '*');
-  }, [isMapReady, factories, checkpoints, selectedId]);
+  }, [isMapReady, factories, checkpoints, checkpointReadings, selectedId]);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col h-full min-h-0 overflow-hidden">
@@ -129,22 +124,33 @@ export default function InteractiveMap({
             พื้นที่ลุ่มแม่น้ำท่าจีน ประเทศไทย — จำลองแบบจำลองระบุกรรมสิทธิ์มลพิษและการตรวจอัตลักษณ์ด้วย Open-Source Map Tiles
           </p>
         </div>
-        <div className="flex flex-wrap gap-2 text-[10px] font-bold text-slate-600 bg-slate-50 p-1.5 rounded-lg border border-slate-200/60 w-fit">
-          <span className="flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจแม่น้ำ (ปลอดภัย)
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจ (เฝ้าระวัง 1 ค่า)
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจ (วิกฤต 2 ค่าขึ้นไป)
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block border border-white shadow-xs" /> โรงงานผ่านเกณฑ์ปกติ
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> โรงงานปล่อยมลพิษล้นเกณฑ์
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200/60 rounded-lg px-2.5 py-1.5">
+            <Calendar className="w-3.5 h-3.5 text-blue-600" />
+            วันที่/เวลาย้อนหลัง:
+            <input
+              type="datetime-local"
+              value={checkpointDateTime}
+              onChange={(e) => onCheckpointDateTimeChange(e.target.value)}
+              min="2015-01-01T00:00"
+              max="2023-12-31T23:59"
+              className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-mono"
+            />
+          </label>
+          <div className="flex flex-wrap gap-2 text-[10px] font-bold text-slate-600 bg-slate-50 p-1.5 rounded-lg border border-slate-200/60 w-fit">
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจแม่น้ำ (ปกติ)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจ (ค่าเกินเกณฑ์)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block border border-white shadow-xs" /> โรงงานผ่านเกณฑ์ปกติ
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> โรงงานปล่อยมลพิษล้นเกณฑ์
+            </span>
+          </div>
         </div>
       </div>
 
@@ -364,9 +370,7 @@ export default function InteractiveMap({
               <div className="space-y-4">
                 <div className="flex items-start gap-2">
                   <div className={`p-1.5 rounded-lg shrink-0 ${
-                    cpRiskLevel === 'critical' ? 'bg-rose-500/20 text-rose-400'
-                    : cpRiskLevel === 'warning' ? 'bg-amber-500/20 text-amber-400'
-                    : 'bg-emerald-500/20 text-emerald-400'
+                    selectedCheckpointEval?.isViolating ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'
                   }`}>
                     <MapPin className="w-5 h-5" />
                   </div>
@@ -377,179 +381,77 @@ export default function InteractiveMap({
                 </div>
 
                 <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                  cpRiskLevel === 'critical'
+                  selectedCheckpointEval?.isViolating
                     ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                    : cpRiskLevel === 'warning'
-                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 }`}>
-                  {cpRiskLevel === 'critical'
-                    ? `🚨 วิกฤต — เกินมาตรฐาน ${cpViolationCount} ค่า`
-                    : cpRiskLevel === 'warning'
-                    ? '⚠️ เฝ้าระวัง — เกินมาตรฐาน 1 ค่า'
-                    : '🛡️ ปลอดภัย ตามเกณฑ์ปกติ'}
+                  {selectedCheckpointEval?.isViolating ? '🚨 ค่าเกินเกณฑ์มาตรฐาน' : '🛡️ ปกติ ตามเกณฑ์'}
                 </span>
 
-                <div className="grid grid-cols-2 gap-1 p-1 bg-slate-950 rounded-lg border border-slate-800">
-                  <button
-                    onClick={() => setCpTab('stats')}
-                    className={`py-1.5 px-2 rounded font-bold text-[10px] transition-all flex items-center justify-center gap-1 ${
-                      cpTab === 'stats' ? 'bg-slate-800 text-emerald-300 shadow-sm' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <ClipboardList className="w-3.5 h-3.5" />
-                    พารามิเตอร์ตรวจวัด
-                  </button>
-                  <button
-                    onClick={() => setCpTab('risk')}
-                    className={`py-1.5 px-2 rounded font-bold text-[10px] transition-all flex items-center justify-center gap-1 ${
-                      cpTab === 'risk' ? 'bg-slate-800 text-amber-300 shadow-sm' : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <AlertTriangle className="w-3.5 h-3.5" />
-                    วิเคราะห์ต้นเหตุ (Attribution)
-                  </button>
-                </div>
-
-                {cpTab === 'stats' ? (
-                  <div className="space-y-3">
-                    <div className="space-y-2 pt-1 border-t border-slate-800 font-mono text-[11px] text-slate-350">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-sans">ตำแหน่งที่พิกัด:</span>
-                        <span className="text-slate-300">{selectedCheckpoint.lat.toFixed(4)}°N, {selectedCheckpoint.lon.toFixed(4)}°E</span>
-                      </div>
-                      <div className="flex justify-between border-t border-slate-800/50 pt-1.5">
-                        <span className="text-slate-500 font-sans">ค่า BOD ในลำน้ำเฉลี่ย:</span>
-                        <span className={cpViolationFlags?.bod ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>
-                          {selectedCheckpoint.bod.toFixed(2)} มก./ลิตร
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-sans">ค่า COD ในแม่น้ำเฉลี่ย:</span>
-                        <span className={cpViolationFlags?.cod ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>
-                          {selectedCheckpoint.cod.toFixed(2)} มก./ลิตร
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-sans font-bold text-amber-500">แบคทีเรียฟีคัล (Fecal):</span>
-                        <span className={cpViolationFlags?.fecal ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>
-                          {selectedCheckpoint.fecalColiform.toLocaleString()} MPN
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-sans text-teal-400">ไนโตรเจนสะสม (N):</span>
-                        <span className={cpViolationFlags?.nitrogen ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>
-                          {selectedCheckpoint.nitrogen.toFixed(2)} มก./ลิตร
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500 font-sans">ค่านำไฟฟ้าแม่น้ำ (EC):</span>
-                        <span className="text-slate-350">{selectedCheckpoint.ec.toLocaleString()} µS/cm</span>
-                      </div>
+                <div className="space-y-3">
+                  <div className="space-y-2 pt-1 border-t border-slate-800 font-mono text-[11px] text-slate-350">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500 font-sans">ตำแหน่งที่พิกัด:</span>
+                      <span className="text-slate-300">{selectedCheckpoint.lat.toFixed(4)}°N, {selectedCheckpoint.lon.toFixed(4)}°E</span>
                     </div>
-                    <div className="bg-slate-950 p-2 rounded-lg border border-slate-800 text-[10px] text-slate-400 font-sans">
-                      <div className="flex gap-1 items-start">
-                        <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
-                        <span>
-                          เกณฑ์เป้าหมายน้ำลุ่มท่าจีนประเภทที่ 3: BOD &le; {DIW_STANDARDS.RIVER_BOD_MAX} มก./ลิตร และปริมาณแบคทีเรียชีวภาพสะสมฟีคัล &le; {DIW_STANDARDS.RIVER_FECAL_MAX} MPN
-                        </span>
-                      </div>
+                    {selectedCheckpointReading ? (
+                      <>
+                        <div className="flex justify-between border-t border-slate-800/50 pt-1.5">
+                          <span className="text-slate-500 font-sans">pH:</span>
+                          <span className="text-slate-200 font-bold">
+                            {selectedCheckpointReading.values.pH ?? '—'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500 font-sans">DO (ออกซิเจนละลายน้ำ):</span>
+                          <span className="text-slate-200 font-bold">
+                            {selectedCheckpointReading.values.DO ?? '—'} มก./ลิตร
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500 font-sans">ค่านำไฟฟ้าแม่น้ำ (EC):</span>
+                          <span className="text-slate-200 font-bold">
+                            {selectedCheckpointReading.values.EC ?? '—'} µS/cm
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500 font-sans">อุณหภูมิ (Temp):</span>
+                          <span className="text-slate-200 font-bold">
+                            {selectedCheckpointReading.values.Temp ?? '—'} °C
+                          </span>
+                        </div>
+                        <div className="text-[9px] text-slate-500 pt-1 border-t border-slate-800/50">
+                          เวลาที่บันทึกจริง: {selectedCheckpointReading.timestamp.replace('T', ' ')}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-800/50">
+                        ไม่มีข้อมูลบันทึกในช่วงวันที่/เวลาที่เลือกไว้บนแดชบอร์ด
+                      </p>
+                    )}
+                  </div>
+
+                  {selectedCheckpointEval && selectedCheckpointEval.reasons.length > 0 && (
+                    <div className="bg-rose-950/40 p-2.5 rounded-lg border border-rose-900/50 space-y-1">
+                      <span className="text-[10px] text-rose-300 font-extrabold flex items-center gap-1">
+                        <Info className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        เหตุผลที่เกินเกณฑ์:
+                      </span>
+                      <ul className="text-[10px] text-rose-200/90 leading-relaxed font-sans list-disc pl-3 space-y-0.5">
+                        {selectedCheckpointEval.reasons.map((r, i) => <li key={i}>{r}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="bg-slate-950 p-2 rounded-lg border border-slate-800 text-[10px] text-slate-400 font-sans">
+                    <div className="flex gap-1 items-start">
+                      <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                      <span>
+                        เกณฑ์: DO &ge; 2.0 มก./ลิตร, pH 6.5-8.5, อุณหภูมิไม่เกิน 35°C — EC ไม่ประเมินที่นครชัยศรี/กระทุ่มแบน เนื่องจากมีน้ำเค็มหนุนตามธรรมชาติ ค่าที่แสดงมาจากไฟล์ข้อมูลย้อนหลังจริง เปลี่ยนวันที่/เวลาได้ที่ตารางจุดตรวจด้านล่างแดชบอร์ด
+                      </span>
                     </div>
                   </div>
-                ) : (
-                  (() => {
-                    const attr = calculateSourceAttribution(
-                      selectedCheckpoint.id,
-                      selectedCheckpoint.bod,
-                      selectedCheckpoint.cod,
-                      selectedCheckpoint.fecalColiform,
-                      selectedCheckpoint.nitrogen,
-                      selectedCheckpoint.ec,
-                      factories
-                    );
-                    return (
-                      <div className="space-y-4">
-                        <div className="space-y-2 border-b border-slate-800 pb-3">
-                          <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">เปรียบเทียบสัดส่วนต้นเหตุที่ตกกระทบ:</span>
-                          {[
-                            { label: '🏭 ฝั่งอุตสาหกรรม (Factories)', prob: attr.factoryProb, colorClass: attr.factoryProb > 45 ? 'bg-rose-500' : 'bg-sky-500', textClass: 'text-sky-400', Icon: FactoryIcon },
-                            { label: '🏘️ เทศบาลที่พักชุมชน (Sewage)',  prob: attr.residentialProb, colorClass: 'bg-amber-500',   textClass: 'text-amber-400',  Icon: Users },
-                            { label: '🌾 แฝงดินเพาะปลูก (Agriculture)', prob: attr.agricultureProb, colorClass: 'bg-emerald-500', textClass: 'text-emerald-400', Icon: Sprout },
-                          ].map(({ label, prob, colorClass, textClass, Icon }) => (
-                            <div key={label} className="space-y-1">
-                              <div className="flex justify-between text-[11px] font-medium leading-none">
-                                <span className={`flex items-center gap-1 ${textClass}`}><Icon className={`w-3.5 h-3.5 ${textClass}`} />{label}</span>
-                                <span className="font-bold text-slate-100">{prob}%</span>
-                              </div>
-                              <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                                <div className={`h-full rounded-full transition-all duration-500 ${colorClass}`} style={{ width: `${prob}%` }} />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1">
-                          <span className="text-[10px] text-slate-200 font-extrabold flex items-center gap-1">
-                            <Info className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                            {attr.dominantSource === 'factories'    && '🚨 ค่าน้ำชี้ชัดจากของเสียเคมีอุตสาหกรรม'}
-                            {attr.dominantSource === 'residential'  && '🏘️ บ่งบอกปรกติสิ่งปฏิกูลจากสุขาภิบาลชุมชน'}
-                            {attr.dominantSource === 'agriculture'  && '🌾 บ่งบอกชะล้างมวลปุ๋ยเคมีฝั่งรอบพืช'}
-                            {attr.dominantSource === 'normal'       && '🟢 ระดับดัชนีภาพรวมคงคุณภาพปลอดภัยเป็นปกติ'}
-                          </span>
-                          <p className="text-[10px] text-slate-400 leading-relaxed font-sans">
-                            {attr.dominantSource === 'factories'   && 'มีระดับ COD สูงสัมพัทธ์และกระแสเทนำไฟฟ้าที่เหนี่ยวนำข้ามระดับ บ่งชี้วัตถุน้ำเสียมาจากอุตสาหกรรมเคมีและน้ำล้างแบบเข้มข้น'}
-                            {attr.dominantSource === 'residential' && 'ตรวจพบดัชนีแบคทีเรียชีวภาพฟีคัลโดดสูง ท่ามกลางศักยภาพการสลายตามธรรมชาติชี้สัญญาณปฏิกูลท่อเปิดเมืองทองและบ้านพักเป็นเอกเทศ'}
-                            {attr.dominantSource === 'agriculture' && 'ตรวจพบสัดส่วนสารแร่ธาตุไนโตรเจนสะสมในดินทรายล้นกระโดด ชี้การชะล้างปุ๋ยและยาเร่งบำรุงพืชผักจากลานดินชุมชนภายนอก'}
-                            {attr.dominantSource === 'normal'      && 'พารามิเตอร์ทางสิ่งแวดล้อมสถิติดำเนินการอยู่ในอัตราควบคุม สอดรับเกณฑ์มาตรฐานกองลุ่มแม่น้ำชั้นดีทั่วไป'}
-                          </p>
-                        </div>
-
-                        {attr.factoriesRisk.length > 0 && (
-                          <div className="space-y-2 border-t border-slate-800 pt-2.5">
-                            <span className="text-[10px] font-black text-slate-300 flex items-center gap-1 uppercase block tracking-wider">
-                              <FlameKindling className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
-                              อัตราภาระคดีล้นปล่อยโรงงานเหนือขอบน้ำ ({attr.factoriesRisk.length} โรง)
-                            </span>
-                            <div className="space-y-2 font-sans max-h-48 overflow-y-auto pr-1">
-                              {attr.factoriesRisk.map((risk) => (
-                                <div key={risk.factoryId} className="bg-slate-950 p-2 rounded-lg border border-slate-850 space-y-1.5 hover:border-slate-700 transition-colors">
-                                  <div className="flex justify-between items-center">
-                                    <span className="font-mono font-bold text-[11px] text-sky-400">
-                                      {risk.factoryId} <span className="text-slate-400 font-sans font-medium text-[10px] truncate max-w-[120px] inline-block align-bottom">{risk.name}</span>
-                                    </span>
-                                    <span className={`px-1.5 py-0.5 rounded text-[8.5px] font-black font-mono tracking-wider ${
-                                      risk.riskScore > 75 ? 'bg-rose-950 text-rose-300 border border-rose-900'
-                                        : risk.riskScore > 45 ? 'bg-amber-950/80 text-amber-300 border border-amber-900/40'
-                                        : 'bg-blue-950 text-blue-300 border border-blue-900'
-                                    }`}>
-                                      {risk.riskScore}% RISK
-                                    </span>
-                                  </div>
-                                  <div className="text-[9.5px] leading-tight text-slate-400 p-1 bg-slate-900 rounded font-mono">
-                                    <strong className="text-slate-500 font-sans text-[8.5px] block font-bold">⚠️ วัตถุละลายเคมี/สารอันตรายประเภทหลัก:</strong>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {risk.substances.map((sub, i) => (
-                                        <span key={i} className="bg-slate-950 rounded px-1.5 py-0.5 text-[8px] text-slate-350 border border-slate-800 inline-block font-sans font-bold leading-none">
-                                          {sub}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                  {risk.isViolating && (
-                                    <span className="text-[8.5px] font-black font-sans uppercase text-rose-400 flex items-center gap-0.5 bg-rose-500/10 w-fit px-1.5 py-0.5 rounded border border-rose-500/20 animate-pulse">
-                                      <AlertCircle className="w-3 h-3" />
-                                      ตรวจพบค่าเคมีเกินกฎกระทรวง!
-                                    </span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()
-                )}
+                </div>
               </div>
 
             ) : (

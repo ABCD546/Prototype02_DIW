@@ -7,11 +7,8 @@ import React from 'react';
 import { Scenario } from '../types';
 import { SCENARIOS } from '../data';
 import { 
-  Layers, 
-  Settings, 
   RefreshCw, 
   CloudSun, 
-  Calendar,
   AlertTriangle
 } from 'lucide-react';
 
@@ -43,17 +40,8 @@ export default function SidebarControls({
 
   return (
     <div className="bg-white text-slate-700 rounded-2xl shadow-sm border border-slate-200 p-6 space-y-6 select-none">
-      {/* 1. Header row: title + reset action inline (full-width layout) */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 pb-4 border-b border-slate-100">
-        <div>
-          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-            <Layers className="w-5 h-5 text-blue-600" />
-            ระบบจำลองคุณภาพน้ำ 
-          </h3>
-          <p className="text-xs text-slate-500 mt-1 leading-snug max-w-2xl">
-            ติดตามและทำนายวิกฤตสิ่งแวดล้มลุ่มแม่น้ำท่าจีน ด้วยโมเดลระบบจำลองระดับสารผสมคลาดเคลื่อนทางคณิตศาสตร์
-          </p>
-        </div>
+      {/* 1. Header row: reset action only (title removed) */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-end gap-3 pb-4 border-b border-slate-100">
         <button 
           onClick={onResetToScenarioDefaults}
           className="shrink-0 text-[11px] font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1.5 transition-colors hover:underline cursor-pointer bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg border border-blue-100"
@@ -64,16 +52,11 @@ export default function SidebarControls({
         </button>
       </div>
 
-      {/* 2. Main 3-column row: ประวัติเหตุการณ์ | ตัวแปรอุทกวิทยา | วิเคราะห์รอยนิ้วมือ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* 2. Main 2-column row: ประวัติเหตุการณ์ | ตัวแปรอุทกวิทยา */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
         {/* 2a. Scenario Selection (Timeline: "ประวัติข้อมูลย้อนหลัง") */}
         <div className="space-y-3">
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block flex items-center gap-1.5">
-            <Calendar className="w-4 h-4 text-blue-600" />
-            จำลองข้อมูลย้อนหลังเชิงเหตุการณ์
-          </label>
-          
           <div className="space-y-1.5 max-h-[320px] overflow-y-auto custom-scrollbar pr-1">
             {SCENARIOS.map((sc) => {
               const isActive = selectedScenarioId === sc.id;
@@ -118,11 +101,6 @@ export default function SidebarControls({
 
         {/* 2b. Hydrology Inputs Component Area */}
         <div className="space-y-3 text-xs">
-          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-            <Settings className="w-4 h-4 text-blue-600" />
-            ตัวแปรอุทกวิทยาทางกายภาพ & เคมีชีวภาพ
-          </label>
-
           {/* Dynamic Readouts synced with timeline, but customizable */}
           <div className="space-y-3">
             
@@ -151,54 +129,8 @@ export default function SidebarControls({
               )}
             </div>
 
-            {/* B. Community Sewage Inputs (Fecal Coliform) */}
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
-              <div className="flex justify-between items-center text-[11px]">
-                <span className="text-slate-600 font-bold">ปฏิกูลเทศบาลชุมชน (Fecal):</span>
-                <span className="font-mono text-emerald-600 font-extrabold">
-                  {riverFecal.toLocaleString()} MPN
-                </span>
-              </div>
-              <input
-                type="range"
-                min={100}
-                max={15000}
-                step={100}
-                value={riverFecal}
-                onChange={(e) => onRiverFecalChange(parseInt(e.target.value))}
-                className="w-full accent-emerald-600 cursor-pointer text-slate-300"
-              />
-            </div>
+            
 
-            {/* C. Agricultural Fertilizer Inputs (Nitrogen) */}
-            <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
-              <div className="flex justify-between items-center text-[11px]">
-                <span className="text-slate-600 font-bold">ปุ๋ยเคมีแปลงเพาะปลูก (Nitrogen):</span>
-                <span className="font-mono text-cyan-600 font-extrabold">
-                  {riverNitrogen.toFixed(1)} มก./ลิตร
-                </span>
-              </div>
-              <input
-                type="range"
-                min={0.1}
-                max={12.0}
-                step={0.1}
-                value={riverNitrogen}
-                onChange={(e) => onRiverNitrogenChange(parseFloat(e.target.value))}
-                className="w-full accent-cyan-600 cursor-pointer text-slate-300"
-              />
-            </div>
-
-          </div>
-        </div>
-
-        {/* 2c. Decision Support block (moved beside hydrology inputs to fill the 3rd column) */}
-        <div className="flex flex-col">
-          <div className="p-4 bg-blue-950 text-white rounded-xl h-full flex flex-col justify-center">
-            <h4 className="text-[10px] font-black uppercase tracking-wider text-blue-300">วิเคราะห์รอยนิ้วมือ กรอ.</h4>
-            <p className="text-[11px] leading-snug opacity-90 mt-1">
-              ระบบแยกประเภทและวิเคราะห์ต้นน้ำเพื่อคืนความยุติธรรมให้สถานบริการอุตสาหกรรมในลุ่มน้ำท่าจีนอย่างน่าเชื่อถือ
-            </p>
           </div>
         </div>
 

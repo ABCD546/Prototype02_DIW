@@ -4,20 +4,17 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Factory, Checkpoint } from './types';
+import { Factory, Checkpoint, CheckpointReading } from './types';
 import { INITIAL_FACTORIES, INITIAL_CHECKPOINTS, SCENARIOS, DIW_STANDARDS } from './data';
-import { simulateWaterNetwork, diagnosePollutionSource } from './utils';
-import SidebarControls from './components/SidebarControls';
+import { getViolatedFactories } from './utils';
+import { getCheckpointReadingAt } from './checkpointData';
 import InteractiveMap from './components/InteractiveMap';
-import { MetricCard, DefenseBanner } from './components/DWidgetCard';
-import ComparisonCharts from './components/ComparisonCharts';
-import AlertHistoryLog from './components/AlertHistoryLog';
+import CheckpointTrendChart from './components/CheckpointTrendChart';
 import { 
   ShieldCheck, 
-  Activity, 
-  Droplet, 
   Table, 
-  TrendingDown,
+  Calendar,
+  LineChart,
 } from 'lucide-react';
 
 export default function App() {
@@ -30,6 +27,13 @@ export default function App() {
   const [riverEC, setRiverEC] = useState<number>(280);
   const [factories, setFactories] = useState<Factory[]>(INITIAL_FACTORIES);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>('TTC02'); // Default selection for insight card
+
+  // Checkpoint (CP) historical data: date-time picker + loaded readings per station
+  const [checkpointDateTime, setCheckpointDateTime] = useState<string>('2023-06-15T09:00');
+  const [checkpointReadings, setCheckpointReadings] = useState<Record<string, CheckpointReading | null>>({});
+  const [loadingCheckpoints, setLoadingCheckpoints] = useState<boolean>(false);
+  const [checkpointError, setCheckpointError] = useState<string | null>(null);
+  const [trendChartStationId, setTrendChartStationId] = useState<string | null>(null);
 
   // Fetch baseline scenario context
   const currentScenario = SCENARIOS.find(s => s.id === selectedScenarioId) || SCENARIOS[1];
@@ -73,6 +77,40 @@ export default function App() {
   const handleSelectScenario = (id: number) => {
     setSelectedScenarioId(id);
   };
+
+  // Load historical checkpoint readings (pH/DO/EC/Temp) for every station
+  // whenever the selected date-time changes.
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingCheckpoints(true);
+    setCheckpointError(null);
+    const isoTarget = checkpointDateTime.length === 16 ? `${checkpointDateTime}:00` : checkpointDateTime;
+
+    Promise.all(
+      INITIAL_CHECKPOINTS.map(async (cp) => {
+        try {
+          const reading = await getCheckpointReadingAt(cp.id, isoTarget);
+          return [cp.id, reading] as const;
+        } catch (err) {
+          console.error(`Failed to load checkpoint reading for ${cp.id}:`, err);
+          return [cp.id, null] as const;
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      const map: Record<string, CheckpointReading | null> = {};
+      let anyMissing = false;
+      for (const [id, reading] of results) {
+        map[id] = reading;
+        if (!reading) anyMissing = true;
+      }
+      setCheckpointReadings(map);
+      if (anyMissing) setCheckpointError('บางสถานีไม่มีข้อมูลในช่วงวันที่/เวลาที่เลือก (นอกช่วงข้อมูลที่มี)');
+      setLoadingCheckpoints(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [checkpointDateTime]);
 
   // Handle manual hydrology slider manipulation
   const handleRiverFlowRateChange = (val: number) => {
@@ -124,57 +162,11 @@ export default function App() {
     setFactories(updatedFactories);
   };
 
-  // Run full system simulation (Dynamic mass balance and spatial projections)
-  const { checkpoints, violatedFactories } = simulateWaterNetwork(
-    riverFlowRate,
-    {
-      riverBOD,
-      riverCOD,
-      riverFecal,
-      riverNitrogen,
-      riverEC,
-    },
-    factories
-  );
-
-  // Compute overall downriver diagnostics based on CP03 checkpoint values
-  const downstreamCP = checkpoints.find(c => c.id === 'CP10') || checkpoints[checkpoints.length - 1];
-  const diagnostics = diagnosePollutionSource(
-    downstreamCP.bod,
-    downstreamCP.cod,
-    downstreamCP.fecalColiform,
-    downstreamCP.nitrogen,
-    downstreamCP.ec
-  );
-
-  // Determine regulatory defense outcomes
-  let alertLevel: 'safe' | 'warning' | 'critical' = 'safe';
-  let dynamicSystemJudgment = currentScenario.systemJudgment;
-  let dynamicDefenseStatus = currentScenario.defenseStatus;
-
-  const bViolating = violatedFactories.length > 0;
-
-  if (bViolating) {
-    alertLevel = 'critical';
-    dynamicSystemJudgment = `คำแจ้งเตือนสำคัญ: ตรวจพบพฤติกรรมการปล่อยมลพิษระบายอุตสาหกรรรล้นมาตรฐานสากล ตรวจสอบต้นตอพบเหตุมาจากโรงงานรหัส ${violatedFactories.join(', ')}`;
-    dynamicDefenseStatus = `มาตรการดำเนินคดีและเข้าตรวจสอบพื้นที่: เริ่มกระบวนการตรวจสอบและดำเนินคดีตามกฎหมายทันที ลงพื้นที่ตรวจพิสูจน์สารเคมีเชิงลึก เพื่อยืนยันหลักฐานการเชื่อมโยงของสารปนเปื้อน โรงงาน ${violatedFactories.join(' และ ')} ว่ามีการระบายน้ำเสียเกินค่ามาตรฐานจริง  เพื่อยืนยันความถูกต้อง`;
-  } else if (downstreamCP.fecalColiform > DIW_STANDARDS.RIVER_FECAL_MAX || downstreamCP.nitrogen > DIW_STANDARDS.RIVER_NITROGEN_MAX) {
-    alertLevel = 'warning';
-    dynamicSystemJudgment = 'ผลตรวจชี้เป้า "ภาคเกษตรกรรม" เป็นต้นเหตุมลพิษ: กลุ่มอุตสาหกรรมในเครือตรวจสอบแล้วไม่เกินมาตรฐาน   ต้นตอมลพิษเกิดจากสารเคมีและปุ๋ยเคมีจากไร่นาในพื้นที่ ร่วมกับน้ำเสียจากชุมชน';
-    dynamicDefenseStatus = 'ผลวิเคราะห์ยืนยัน: สารเคมี ในน้ำเสียระบุชัดเจนว่า สารปนเปื้อน มาจากปุ๋ยเคมีและดินเค็มจากไร่นา ผสมกับน้ำทิ้งตามบ้านเรือน ';
-  } else if (riverFlowRate <= 15000) {
-    alertLevel = 'warning';
-    dynamicSystemJudgment = 'จุดเฝ้าระวังภัยล่วงหน้า: ลำน้ำท่าแม่น้ำไหลแห้งวิกฤต กำลังเจือจางปกติเหือดแห้ง มีความเสี่ยงอัตรารอระบายตกตะกอนตามธรรมชาติสูง';
-    dynamicDefenseStatus = 'ประกาศเตือนภัยพิบัติและสภาพภูมิอากาศ: อัตราไหลจากสถานีต้นน้ำแห้งขอดถึงขีดอันตราย ทำให้พลังเฉลี่ยเจือจางน้ำทิ้งหมดลงชั่วคราว จึงขอความร่วมมือผู้ประกอบการทุกท่านลดปล่อยระบายเป็นสถิติลง 20% เพื่อค้ำจุนสภาพแวดล้อมระบบนิเวศลำน้ำถิ่น';
-  } else {
-    alertLevel = 'safe';
-    dynamicSystemJudgment = 'ทุกจุดตรวจวัดสถานีอยู่ในสภาวะปลอดภัย: พารามิเตอร์ลุ่มน้ำทั้งหมดทำงานได้อย่างดีเยี่ยมตามมาตรฐานเป้าหมาย';
-    dynamicDefenseStatus = 'รายงานสุขภาพลำน้ำและนิเวศวิทยา: อัตราไหลหลักไหลเวียนปกติ สัดส่วนอินทรีย์ในชุมชนอยู่ในระดับทรงตัว บ่อบำบัดน้ำเสียโรงงานทุกสถานประกอบการได้รับการตรวจสอบและบำบัดอย่างสม่ำเสมอ';
-  }
-
-  // Calculate sum of actual discharges vs allowed discharges to show capacity indices
-  const totalActualQ = factories.reduce((acc, f) => acc + f.actualQ, 0);
-  const capacityPct = (totalActualQ / riverFlowRate) * 100;
+  // Checkpoints are now a static list of real monitoring stations — their
+  // water-quality values come from historical CSV/Excel readings (loaded
+  // above), not from a factory mass-balance simulation.
+  const checkpoints = INITIAL_CHECKPOINTS;
+  const violatedFactories = getViolatedFactories(factories);
 
   // Handle entity clicks (Highlights in overlay details)
   const handleSelectEntity = (id: string, type: 'factory' | 'checkpoint') => {
@@ -228,49 +220,6 @@ export default function App() {
       {/* Main Layout Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 md:px-6 py-6 space-y-6">
         
-        {/* 2. Top Banner: The core DIW Defense status display */}
-        <DefenseBanner 
-          systemJudgment={dynamicSystemJudgment}
-          verdict={dynamicDefenseStatus}
-          alertLevel={alertLevel}
-        />
-
-        {/* 3. Streamlit-Style KPI Metrics cards Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard 
-            title="ค่า BOD ปลายน้ำ (สถานี CP10)"
-            value={`${downstreamCP.bod.toFixed(2)} มก./ลิตร`}
-            subValue={downstreamCP.bod > DIW_STANDARDS.RIVER_BOD_MAX ? "🚨 เกินค่ามาตรฐาน" : "✓ ผ่านเกณฑ์ปกติ"}
-            icon={<Droplet className="w-5 h-5 text-sky-500" />}
-            colorClass={downstreamCP.bod > DIW_STANDARDS.RIVER_BOD_MAX ? "text-rose-600" : "text-emerald-600"}
-            bgColorClass="bg-sky-50"
-          />
-          <MetricCard 
-            title="แบคทีเรียชีวภาพ (สถานี CP10)"
-            value={`${downstreamCP.fecalColiform.toLocaleString()} MPN`}
-            subValue="ต่อ 100 มล."
-            icon={<Activity className="w-5 h-5 text-amber-500" />}
-            colorClass={downstreamCP.fecalColiform > DIW_STANDARDS.RIVER_FECAL_MAX ? "text-amber-600" : "text-emerald-600"}
-            bgColorClass="bg-amber-50"
-          />
-          <MetricCard 
-            title="สัดส่วนมวลน้ำทิ้งต่อปริมาณลำน้ำ"
-            value={`${capacityPct.toFixed(2)}%`}
-            subValue="โหนดรับผลลัพธ์ระบาย"
-            icon={<TrendingDown className="w-5 h-5 text-purple-500" />}
-            colorClass={capacityPct > 10 ? "text-amber-600 font-bold" : "text-sky-600"}
-            bgColorClass="bg-purple-50"
-          />
-          <MetricCard 
-            title="กลุ่มต้นกำเนิดที่ระบุอัตลักษณ์ได้"
-            value={diagnostics.iconType === 'industrial' ? 'น้ำเสียปล่อยโรงงาน' : diagnostics.iconType === 'community' ? 'น้ำเสียเทศบาลชุมชน' : diagnostics.iconType === 'agriculture' ? 'ชะปุ๋ยเคมีแปลงเพาะปลูก' : 'สะอาดไม่พบมลพิษพิเศษ'}
-            subValue="คำตัดสินโมเลกุลรอยนิ้วมือ"
-            icon={<ShieldCheck className="w-5 h-5 text-teal-600" />}
-            colorClass={diagnostics.iconType === 'industrial' ? 'text-rose-650 text-rose-600 font-bold' : 'text-slate-700 font-semibold'}
-            bgColorClass="bg-teal-50"
-          />
-        </div>
-
         {/* 4. Full-Width Spatial Map + Controls Below */}
         <div className="flex flex-col gap-6">
           {/* Spatial Google Map Area: Full Width */}
@@ -278,6 +227,9 @@ export default function App() {
             <InteractiveMap 
               factories={factories}
               checkpoints={checkpoints}
+              checkpointReadings={checkpointReadings}
+              checkpointDateTime={checkpointDateTime}
+              onCheckpointDateTimeChange={setCheckpointDateTime}
               selectedId={selectedEntityId}
               onSelectEntity={handleSelectEntity}
               onFactoryParamChange={handleFactoryParamChange}
@@ -285,34 +237,7 @@ export default function App() {
           </div>
 
           {/* Sidebar Control Panel: Full Width below the map */}
-          <div className="w-full">
-            <SidebarControls 
-              selectedScenarioId={selectedScenarioId}
-              onSelectScenario={handleSelectScenario}
-              riverFlowRate={riverFlowRate}
-              onRiverFlowRateChange={handleRiverFlowRateChange}
-              riverFecal={riverFecal}
-              onRiverFecalChange={setRiverFecal}
-              riverNitrogen={riverNitrogen}
-              onRiverNitrogenChange={setRiverNitrogen}
-              onResetToScenarioDefaults={handleResetToScenarioDefaults}
-            />
-          </div>
         </div>
-
-        {/* 5. Profile Analytical Charts section */}
-        <ComparisonCharts 
-          checkpoints={checkpoints}
-          factories={factories}
-        />
-
-        {/* 5.5. Interactive Incident Alert History and Real-time Auditing Logs */}
-        <AlertHistoryLog 
-          factories={factories}
-          checkpoints={checkpoints}
-          currentScenarioName={currentScenario.name}
-          currentScenarioId={currentScenario.id}
-        />
 
         {/* 6. Raw Data Transparency Grids with conditional highlights */}
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -410,94 +335,84 @@ export default function App() {
 
             {/* Checkpoints Data Table */}
             <div className="space-y-3 pt-3 border-t border-slate-100">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block flex items-center gap-1">
-                🌊 สถานีจุดคัดส่งวัดประเมินคุณภาพลำน้ำหลัก (เรียงจากพิกัดระดัลต้นลุ่มน้ำลงหาปลายลุ่มน้ำ)
-              </span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                  🌊 สถานีจุดคัดส่งวัดประเมินคุณภาพลำน้ำหลัก (เรียงจากพิกัดระดับต้นลุ่มน้ำลงหาปลายลุ่มน้ำ)
+                </span>
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                  วันที่/เวลาย้อนหลัง:
+                  <input
+                    type="datetime-local"
+                    value={checkpointDateTime}
+                    onChange={(e) => setCheckpointDateTime(e.target.value)}
+                    min="2015-01-01T00:00"
+                    max="2023-12-31T23:59"
+                    className="bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono"
+                  />
+                </label>
+              </div>
+              {checkpointError && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                  ⚠ {checkpointError}
+                </p>
+              )}
               <div className="overflow-x-auto overflow-y-auto max-h-[300px] border border-slate-200 rounded-xl">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <th className="p-3">รหัสโหนดสถานี</th>
+                      <th className="p-3">รหัสสถานี</th>
                       <th className="p-3">ชื่อสถานีคัดตรวจร่วม</th>
                       <th className="p-3">พิกัดในเขตลุ่มน้ำ (Y, X)</th>
-                      <th className="p-3 text-right">ค่า BOD ในแม่น้ำ (มก./ลิตร)</th>
-                      <th className="p-3 text-right">ค่า COD ในแม่น้ำ (มก./ลิตร)</th>
-                      <th className="p-3 text-right">แบคทีเรียชุมชนฟีคัล (MPN/100มล.)</th>
-                      <th className="p-3 text-right">ปริมาณไนโตรเจน (มก./ลิตร)</th>
-                      <th className="p-3 text-right">ค่านำพาไฟฟ้าชะล้างแม่น้ำ (EC, µS/cm)</th>
-                      <th className="p-3 text-center">สถานะจุดตรวจ</th>
+                      <th className="p-3 text-right">pH</th>
+                      <th className="p-3 text-right">DO (มก./ลิตร)</th>
+                      <th className="p-3 text-right">EC (µS/cm)</th>
+                      <th className="p-3 text-right">Temp (°C)</th>
+                      <th className="p-3">เวลาที่บันทึกจริง</th>
+                      <th className="p-3 text-center">กราฟ</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                    {checkpoints.map((cp) => {
-                      const isBODViolating = cp.bod > DIW_STANDARDS.RIVER_BOD_MAX;
-                      const isCODViolating = cp.cod > DIW_STANDARDS.RIVER_COD_MAX;
-                      const isFecalViolating = cp.fecalColiform > DIW_STANDARDS.RIVER_FECAL_MAX;
-                      const isNitrogenViolating = cp.nitrogen > DIW_STANDARDS.RIVER_NITROGEN_MAX;
+                    {loadingCheckpoints ? (
+                      <tr>
+                        <td colSpan={9} className="p-6 text-center text-slate-400">กำลังโหลดข้อมูล...</td>
+                      </tr>
+                    ) : (
+                      checkpoints.map((cp) => {
+                        const reading = checkpointReadings[cp.id];
+                        const fmt = (v: number | null | undefined, digits = 2) =>
+                          v === null || v === undefined ? '—' : v.toFixed(digits);
 
-                      // นับจำนวนพารามิเตอร์ที่เกินมาตรฐาน: 1 ค่า = เฝ้าระวัง (เหลือง), 2 ค่าขึ้นไป = วิกฤต (แดง)
-                      const violationCount = [isBODViolating, isCODViolating, isFecalViolating, isNitrogenViolating]
-                        .filter(Boolean).length;
-                      const cpRiskLevel: 'safe' | 'warning' | 'critical' =
-                        violationCount >= 2 ? 'critical' : violationCount === 1 ? 'warning' : 'safe';
-
-                      const rowClass =
-                        cpRiskLevel === 'critical' ? 'bg-rose-500/5'
-                        : cpRiskLevel === 'warning' ? 'bg-amber-500/5'
-                        : '';
-
-                      return (
-                        <tr 
-                          key={cp.id} 
-                          className={`hover:bg-slate-50 transition-colors ${rowClass}`}
-                        >
-                          <td className="p-3 font-mono font-bold text-slate-900">{cp.id}</td>
-                          <td className="p-3">{cp.name}</td>
-                          <td className="p-3 font-mono text-slate-500">{cp.lat.toFixed(4)}°, {cp.lon.toFixed(4)}°</td>
-                          <td className={`p-3 text-right font-mono font-bold ${
-                            isBODViolating ? 'text-amber-600 bg-amber-500/10' : 'text-slate-900'
-                          }`}>
-                            {cp.bod.toFixed(2)}
-                          </td>
-                          <td className={`p-3 text-right font-mono font-bold ${
-                            isCODViolating ? 'text-amber-600 bg-amber-500/10' : 'text-slate-900'
-                          }`}>
-                            {cp.cod.toFixed(2)}
-                          </td>
-                          <td className={`p-3 text-right font-mono font-bold ${
-                            isFecalViolating ? 'text-amber-600 bg-amber-500/10' : 'text-slate-900'
-                          }`}>
-                            {cp.fecalColiform.toLocaleString()}
-                          </td>
-                          <td className={`p-3 text-right font-mono font-bold ${
-                            isNitrogenViolating ? 'text-amber-600 bg-amber-500/10' : 'text-slate-900'
-                          }`}>
-                            {cp.nitrogen.toFixed(2)}
-                          </td>
-                          <td className="p-3 text-right font-mono text-slate-900">{cp.ec.toLocaleString()}</td>
-                          <td className="p-3 text-center">
-                            {cpRiskLevel === 'critical' ? (
-                              <span className="inline-block px-2.5 py-0.5 rounded text-[10px] uppercase font-black tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
-                                วิกฤต ({violationCount} ค่า)
-                              </span>
-                            ) : cpRiskLevel === 'warning' ? (
-                              <span className="inline-block px-2.5 py-0.5 rounded text-[10px] uppercase font-black tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
-                                เฝ้าระวัง (1 ค่า)
-                              </span>
-                            ) : (
-                              <span className="inline-block px-2.5 py-0.5 rounded text-[10px] uppercase font-black tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                ปลอดภัย
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                        return (
+                          <tr key={cp.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="p-3 font-mono font-bold text-slate-900">{cp.id}</td>
+                            <td className="p-3">{cp.name}</td>
+                            <td className="p-3 font-mono text-slate-500">{cp.lat.toFixed(4)}°, {cp.lon.toFixed(4)}°</td>
+                            <td className="p-3 text-right font-mono">{fmt(reading?.values.pH)}</td>
+                            <td className="p-3 text-right font-mono">{fmt(reading?.values.DO)}</td>
+                            <td className="p-3 text-right font-mono">{fmt(reading?.values.EC, 1)}</td>
+                            <td className="p-3 text-right font-mono">{fmt(reading?.values.Temp, 1)}</td>
+                            <td className="p-3 font-mono text-slate-400 text-[10px]">
+                              {reading ? reading.timestamp.replace('T', ' ') : 'ไม่มีข้อมูล'}
+                            </td>
+                            <td className="p-3 text-center">
+                              <button
+                                onClick={() => setTrendChartStationId(cp.id)}
+                                title="ดูกราฟแนวโน้มย้อนหลัง"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                              >
+                                <LineChart className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>
               <p className="text-[10px] text-slate-400 leading-tight">
-                * อิงพิกัดเกณฑ์เป้าหมายคุณภาพสิ่งแวดล้อมมาตรฐานลุ่มน้ำทั่วไปประเภทที่ 3 ลำน้ำท่าจีน กำหนดบีบขีดจำกัด BOD ต้องไม่เกินออกลื่นเกิน **{DIW_STANDARDS.RIVER_BOD_MAX} มก./ลิตร** และแบคทีเรียกลิ่นสะสมปฏิกูลต้องไม่หนาเกิน **{DIW_STANDARDS.RIVER_FECAL_MAX} MPN** ต่ออัตราคัดกรอง — จุดตรวจที่มีค่าเกินมาตรฐาน 1 รายการแสดงสถานะ <span className="text-amber-600 font-bold">เฝ้าระวัง</span> และตั้งแต่ 2 รายการขึ้นไปแสดงสถานะ <span className="text-rose-600 font-bold">วิกฤต</span>
+                * ค่าที่แสดงคือค่าที่วัดได้จริงจากไฟล์ข้อมูลย้อนหลังของแต่ละสถานี โดยเลือกแถวที่มีเวลาใกล้เคียงกับวันที่/เวลาที่เลือกมากที่สุด (ข้อมูลบันทึกทุก 30 นาที ตั้งแต่ปี 2558-2566) ช่องที่แสดง "—" หมายถึงไม่มีการบันทึกค่านั้นในช่วงเวลาดังกล่าว
               </p>
             </div>
           </div>
@@ -516,6 +431,14 @@ export default function App() {
         </footer>
 
       </main>
+
+      {trendChartStationId && (
+        <CheckpointTrendChart
+          stations={checkpoints}
+          initialStationId={trendChartStationId}
+          onClose={() => setTrendChartStationId(null)}
+        />
+      )}
     </div>
   );
 }

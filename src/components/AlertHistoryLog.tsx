@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { 
-  Bell, 
   Search, 
   Trash2, 
   FileSpreadsheet, 
@@ -256,10 +255,6 @@ export default function AlertHistoryLog({
       {/* Header Panel styling with deep elegant Navy/Charcoal layout */}
       <div className="p-5 border-b border-slate-200 bg-slate-900 text-white flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h3 className="text-sm font-bold flex items-center gap-2">
-            <Bell className="w-4.5 h-4.5 text-rose-400 animate-pulse" />
-            ระบบประวัติบันทึกแจ้งเตือนภัยลุ่มน้ำและอุตสาหกรรมฝ่าฝืนเกณฑ์กฎหมาย
-          </h3>
           <p className="text-[11px] text-slate-300 mt-0.5">
             สืบค้นข้อมูลบันทึกย้อนหลัง (Incident Logs) เปรียบเทียบตามช่วงเวลา ชลศาสตร์ และการตั้งกระทู้จำลองตรวจสอบเกณฑ์
           </p>

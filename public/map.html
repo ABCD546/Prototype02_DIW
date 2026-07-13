@@ -487,26 +487,12 @@ btnToggleCheckpoints.addEventListener('click', function() {
     btnToggleCheckpoints.classList.toggle('inactive', !checkpointsVisible);
 });
 
-// เกณฑ์มาตรฐานคุณภาพน้ำลุ่มแม่น้ำท่าจีน (อ้างอิงตาม DIW_STANDARDS ใน data.ts)
-const RIVER_STANDARDS = {
-    BOD_MAX: 2.0,
-    COD_MAX: 120.0,
-    FECAL_MAX: 4000,
-    NITROGEN_MAX: 5.0,
-};
-
-// นับจำนวนพารามิเตอร์ของจุดตรวจที่เกินมาตรฐาน แล้วคืนระดับสี: safe (เขียว) / warning (เหลือง, เกิน 1 ค่า) / critical (แดง, เกิน 2 ค่าขึ้นไป)
-function getCheckpointRiskLevel(cp) {
-    let violations = 0;
-    if (cp.bod > RIVER_STANDARDS.BOD_MAX) violations++;
-    if (cp.cod > RIVER_STANDARDS.COD_MAX) violations++;
-    if (cp.fecalColiform > RIVER_STANDARDS.FECAL_MAX) violations++;
-    if (cp.nitrogen > RIVER_STANDARDS.NITROGEN_MAX) violations++;
-
-    if (violations >= 2) return { level: 'critical', color: '#f43f5e', violations };
-    if (violations === 1) return { level: 'warning', color: '#f59e0b', violations };
-    return { level: 'safe', color: '#10b981', violations };
-}
+// จุดตรวจ (checkpoint) สีเขียว = ค่าปกติ, สีแดง = มีค่าเกินเกณฑ์มาตรฐาน
+// (คำนวณ isViolating ไว้แล้วฝั่ง React/InteractiveMap.tsx จากค่า pH/DO/EC/Temp
+// จริงของไฟล์ข้อมูลย้อนหลัง ตามวันเวลาที่เลือกไว้บนแดชบอร์ด — ไม่ใช่ mass-balance
+// จากโรงงานเหมือนเดิม)
+const CHECKPOINT_SAFE_COLOR = '#10b981';
+const CHECKPOINT_VIOLATION_COLOR = '#f43f5e';
 
 window.addEventListener('message', function(event) {
     const data = event.data;
@@ -544,13 +530,13 @@ window.addEventListener('message', function(event) {
 
     (checkpoints || []).forEach(function(cp) {
         const isSelected = selectedId === cp.id;
-        const risk = getCheckpointRiskLevel(cp);
-        const color = risk.color;
+        const isViolating = !!cp.isViolating;
+        const color = isViolating ? CHECKPOINT_VIOLATION_COLOR : CHECKPOINT_SAFE_COLOR;
         const html = `
           <div style="position:relative;width:40px;height:54px;display:flex;flex-direction:column;align-items:center;">
             <div style="position:relative;width:36px;height:36px;">
               ${isSelected ? `<div style="position:absolute;inset:-4px;border:2px dashed ${color};border-radius:9999px;animation:spin 10s linear infinite;box-sizing:border-box;"></div>` : ''}
-              ${risk.level === 'critical' ? `<div style="position:absolute;inset:2px;background:rgba(244,63,94,0.3);border-radius:9999px;animation:ping 1s infinite;box-sizing:border-box;"></div>` : ''}
+              ${isViolating ? `<div style="position:absolute;inset:2px;background:rgba(244,63,94,0.3);border-radius:9999px;animation:ping 1s infinite;box-sizing:border-box;"></div>` : ''}
               <svg viewBox="0 0 24 24" width="36" height="36" style="position:relative;filter:drop-shadow(0 3px 3px rgba(0,0,0,0.35));cursor:pointer;">
                 <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" fill="${color}" stroke="#fff" stroke-width="1.5"></path>
                 <circle cx="12" cy="10" r="3.2" fill="#fff"></circle>

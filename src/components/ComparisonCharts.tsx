@@ -6,7 +6,7 @@
 import React from 'react';
 import { Checkpoint, Factory } from '../types';
 import { DIW_STANDARDS } from '../data';
-import { Waves, Compass, Activity } from 'lucide-react';
+import { Activity } from 'lucide-react';
 
 interface ComparisonChartsProps {
   checkpoints: Checkpoint[];
@@ -50,10 +50,6 @@ export default function ComparisonCharts({ checkpoints, factories }: ComparisonC
         <div>
           <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4">
             <div>
-              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <Waves className="w-4 h-4 text-sky-500 animate-pulse" />
-                โปรไฟล์คุณภาพน้ำในแม่น้ำ (ต้นน้ำ &rarr; ปลายน้ำ)
-              </h4>
               <p className="text-[11px] text-slate-500 mt-0.5">
                 เปรียบเทียบค่าความต้องการออกซิเจนทางชีวเคมี (BOD) และความต้องการออกซิเจนทางเคมี (COD) ตามแต่ละสถานีตรวจวัด
               </p>
@@ -163,10 +159,6 @@ export default function ComparisonCharts({ checkpoints, factories }: ComparisonC
         <div>
           <div className="flex items-center justify-between border-b border-slate-200 pb-3 mb-4">
             <div>
-              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <Compass className="w-4 h-4 text-amber-500" />
-                ระบบวิเคราะห์แยกอัตลักษณ์และรอยนิ้วมือสารมลพิษ (พฤติกรรมก้นแม่น้ำ)
-              </h4>
               <p className="text-[11px] text-slate-500 mt-0.5">
                 การตรวจสอบรอยนิ้วมือสารปนเปื้อนเชิงเปรียบเทียบ ระหว่างแบคทีเรียชุมชน ปุ๋ยเกษตรกรรม และเคมีสารละลายอุตสาหกรรม ณ จุดวัด CP03
               </p>
