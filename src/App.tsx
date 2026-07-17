@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { Factory, Checkpoint, CheckpointReading } from './types';
 import { INITIAL_FACTORIES, INITIAL_CHECKPOINTS, SCENARIOS, DIW_STANDARDS } from './data';
 import { getViolatedFactories } from './utils';
-import { getCheckpointReadingAt } from './checkpointData';
+import { getCheckpointReadingAt, getLatestCommonTimestamp, getLatestOverallTimestamp, toDatetimeLocalValue } from './checkpointData';
 import InteractiveMap from './components/InteractiveMap';
 import CheckpointTrendChart from './components/CheckpointTrendChart';
 import { 
@@ -34,6 +34,7 @@ export default function App() {
   const [loadingCheckpoints, setLoadingCheckpoints] = useState<boolean>(false);
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
   const [trendChartStationId, setTrendChartStationId] = useState<string | null>(null);
+  const [loadingLatestDate, setLoadingLatestDate] = useState<boolean>(false);
 
   // Fetch baseline scenario context
   const currentScenario = SCENARIOS.find(s => s.id === selectedScenarioId) || SCENARIOS[1];
@@ -111,6 +112,38 @@ export default function App() {
 
     return () => { cancelled = true; };
   }, [checkpointDateTime]);
+
+  // เมื่อโหลดแอปครั้งแรก ให้ปรับวันที่/เวลาไปยัง "จุดล่าสุดที่ทุกสถานีมีข้อมูลจริงพร้อมกัน"
+  // แทนค่า default ที่ตั้งไว้กลางปี — ผู้ใช้เปิดมาจะเห็นข้อมูลใหม่สุดที่มีทันที
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const latest = await getLatestCommonTimestamp();
+      if (!cancelled && latest) {
+        const formatted = toDatetimeLocalValue(latest);
+        if (formatted) setCheckpointDateTime(formatted);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ปุ่ม "ข้อมูลล่าสุด" — ปุ่ม "วันนี้" ของ browser (native datetime-local picker)
+  // จะกระโดดไปวันที่ปฏิทินจริงเสมอ ซึ่งอยู่นอกช่วงข้อมูลย้อนหลังที่มี จึงต้องมีปุ่มนี้แยกต่างหาก
+  // ใช้จุดล่าสุด "สุดๆ" ของข้อมูลทั้งหมด (ไม่ใช่จุดที่ทุกสถานีมีร่วมกัน) ตามที่ผู้ใช้เลือก —
+  // สถานีที่ยังไม่มีข้อมูลถึงจุดนั้นจะขึ้นแจ้งเตือนใน checkpointError แทน
+  const handleJumpToLatestData = async () => {
+    setLoadingLatestDate(true);
+    try {
+      const latest = await getLatestOverallTimestamp();
+      if (latest) {
+        const formatted = toDatetimeLocalValue(latest);
+        if (formatted) setCheckpointDateTime(formatted);
+      }
+    } finally {
+      setLoadingLatestDate(false);
+    }
+  };
 
   // Handle manual hydrology slider manipulation
   const handleRiverFlowRateChange = (val: number) => {
@@ -222,6 +255,8 @@ export default function App() {
               checkpointReadings={checkpointReadings}
               checkpointDateTime={checkpointDateTime}
               onCheckpointDateTimeChange={setCheckpointDateTime}
+              onJumpToLatestData={handleJumpToLatestData}
+              loadingLatestDate={loadingLatestDate}
               selectedId={selectedEntityId}
               onSelectEntity={handleSelectEntity}
               onFactoryParamChange={handleFactoryParamChange}
@@ -331,18 +366,29 @@ export default function App() {
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
                   🌊 สถานีจุดคัดส่งวัดประเมินคุณภาพลำน้ำหลัก (เรียงจากพิกัดระดับต้นลุ่มน้ำลงหาปลายลุ่มน้ำ)
                 </span>
-                <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                  วันที่/เวลาย้อนหลัง:
-                  <input
-                    type="datetime-local"
-                    value={checkpointDateTime}
-                    onChange={(e) => setCheckpointDateTime(e.target.value)}
-                    min="2015-01-01T00:00"
-                    max="2024-12-31T23:59"
-                    className="bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono"
-                  />
-                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                    วันที่/เวลาย้อนหลัง:
+                    <input
+                      type="datetime-local"
+                      value={checkpointDateTime}
+                      onChange={(e) => setCheckpointDateTime(e.target.value)}
+                      min="2015-01-01T00:00"
+                      max="2024-12-31T23:59"
+                      className="bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono"
+                    />
+                  </label>
+                  <button
+                    onClick={handleJumpToLatestData}
+                    disabled={loadingLatestDate}
+                    title="ปุ่ม “วันนี้” ของปฏิทินจะพาไปวันที่ปัจจุบันจริงซึ่งไม่มีข้อมูล กดปุ่มนี้แทนเพื่อไปยังข้อมูลใหม่สุดที่มีจริง"
+                    className="flex items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-wait"
+                  >
+                    <Calendar className="w-3.5 h-3.5" />
+                    {loadingLatestDate ? 'กำลังค้นหา...' : 'ข้อมูลล่าสุด'}
+                  </button>
+                </div>
               </div>
               {checkpointError && (
                 <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">

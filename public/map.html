@@ -74,7 +74,38 @@
         .layer-toggle-btn.inactive:hover { background: rgba(255,255,255,0.09); }
 
         /* ─── BODY ─── */
-        #body { display: flex; flex: 1; overflow: hidden; }
+        #body { display: flex; flex: 1; overflow: hidden; position: relative; }
+
+        /* ─── EDGE TABS (แทนปุ่ม "Layer แม่น้ำ" / "ข้อมูล" บน header เดิม) ─── */
+        .edge-tab {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 56px;
+            background: rgba(15,23,42,0.92);
+            border: 1px solid #1e3a5f;
+            color: #7dd3fc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 1400;
+            transition: background 0.15s, left 0.2s ease;
+            backdrop-filter: blur(4px);
+            padding: 0;
+        }
+        .edge-tab:hover { background: rgba(30,58,95,0.95); color: #fff; }
+        .edge-tab svg { width: 13px; height: 13px; transition: transform 0.2s; flex-shrink: 0; }
+        .edge-tab-left { left: 240px; border-radius: 0 8px 8px 0; border-left: none; }
+        .edge-tab-left.is-collapsed { left: 0; }
+        .edge-tab-left.is-collapsed svg { transform: scaleX(-1); }
+        .edge-tab-right { right: 0; border-radius: 8px 0 0 8px; border-right: none; }
+        .edge-tab-right.is-collapsed svg { transform: scaleX(-1); }
+
+        @media (max-width: 768px) {
+            .edge-tab-left { left: 0 !important; }
+        }
 
         /* ─── SIDEBAR ─── */
         #sidebar {
@@ -153,6 +184,23 @@
         }
         .waterway-item .wtype.river { background: #1e3a5f; color: #7dd3fc; }
         .waterway-item .wtype.canal { background: #14532d; color: #86efac; }
+
+        /* ─── FULLSCREEN CONTROL (ปุ่มขยายแผนที่เต็มจอ) ─── */
+        .map-fullscreen-btn {
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #fff;
+            color: #334155;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .map-fullscreen-btn:hover { background: #f1f5f9; }
+        .map-fullscreen-btn svg { width: 16px; height: 16px; }
+        #app:fullscreen #header,
+        #app:fullscreen #info-bar { flex-shrink: 0; }
 
         /* ─── MAP ─── */
         #map { flex: 1; }
@@ -241,28 +289,14 @@
                     <path d="M12 18h1"></path>
                     <path d="M7 18h1"></path>
                 </svg>
-                โรงงาน
+                ตำแหน่งจุดปล่อยน้ำโรงงาน
             </button>
             <button type="button" id="btn-toggle-checkpoints" class="layer-toggle-btn" title="ซ่อน/แสดงจุดตรวจ (CP01–CP10)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path>
                     <circle cx="12" cy="10" r="3"></circle>
                 </svg>
-                จุดตรวจ
-            </button>
-            <button type="button" id="btn-toggle-layerpanel" class="layer-toggle-btn" title="ย่อ/ขยายแผง Layer แผนที่">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"></path>
-                    <circle cx="12" cy="10" r="3"></circle>
-                </svg>
-                Layer แม่น้ำ
-                
-            </button>
-            <button type="button" id="btn-toggle-infopanel" class="layer-toggle-btn" title="ซ่อน/แสดงแผงข้อมูล">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path>
-                </svg>
-                ข้อมูล
+                สถานีตรวจวัดคุณภาพน้ำ
             </button>
         </div>
         <div class="stats">
@@ -314,6 +348,13 @@
             </div>
         </div>
 
+        <!-- EDGE TAB: ย่อ/ขยายแผง Layer (แทนปุ่ม "Layer แม่น้ำ" เดิม) -->
+        <button type="button" id="tab-toggle-layerpanel" class="edge-tab edge-tab-left" title="ย่อ/ขยายแผง Layer แผนที่">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+        </button>
+
         <!-- MAP -->
         <div id="map"></div>
     </div>
@@ -342,6 +383,52 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 19,
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>'
 }).addTo(map);
+
+// ─── FULLSCREEN CONTROL (ปุ่มขยาย GIS เต็มจอ) ──────────────────────────
+const ICON_MAXIMIZE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>';
+const ICON_MINIMIZE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"></path><path d="M21 8h-3a2 2 0 0 1-2-2V3"></path><path d="M3 16h3a2 2 0 0 1 2 2v3"></path><path d="M16 21v-3a2 2 0 0 1 2-2h3"></path></svg>';
+let fullscreenBtnEl = null;
+
+function toggleFullscreen() {
+    const appEl = document.getElementById('app');
+    if (!document.fullscreenElement) {
+        (appEl.requestFullscreen ? appEl.requestFullscreen() : Promise.reject())
+            .catch(function() {
+                // เบราว์เซอร์บาง iframe อาจไม่ได้รับสิทธิ์ fullscreen เอง — ให้ parent (React) ช่วยขยาย container แทน
+                window.parent.postMessage({ type: 'REQUEST_FULLSCREEN' }, '*');
+            });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+document.addEventListener('fullscreenchange', function() {
+    const isFs = !!document.fullscreenElement;
+    if (fullscreenBtnEl) {
+        fullscreenBtnEl.innerHTML = isFs ? ICON_MINIMIZE : ICON_MAXIMIZE;
+        fullscreenBtnEl.title = isFs ? 'ออกจากโหมดเต็มจอ' : 'ขยายแผนที่เต็มจอ';
+    }
+    setTimeout(function() { map.invalidateSize(); }, 150);
+});
+
+const FullscreenControl = L.Control.extend({
+    options: { position: 'topright' },
+    onAdd: function() {
+        const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+        const btn = L.DomUtil.create('a', 'map-fullscreen-btn', container);
+        btn.href = '#';
+        btn.title = 'ขยายแผนที่เต็มจอ';
+        btn.innerHTML = ICON_MAXIMIZE;
+        L.DomEvent.disableClickPropagation(container);
+        L.DomEvent.on(btn, 'click', function(e) {
+            L.DomEvent.preventDefault(e);
+            toggleFullscreen();
+        });
+        fullscreenBtnEl = btn;
+        return container;
+    }
+});
+map.addControl(new FullscreenControl());
 
 // ─── LAYER GROUPS ─────────────────────────────────────────────────────
 const layers = {
@@ -582,18 +669,12 @@ function toggleSidebar() {
     window.parent.postMessage({ type: 'SIDEBAR_STATE', collapsed: sidebarCollapsed }, '*');
 }
 
-// ปุ่ม "แผง Layer" บน header — ย่อ/ขยายแผง legend ฝั่งซ้ายของแผนที่เอง
-const btnToggleLayerPanel = document.getElementById('btn-toggle-layerpanel');
-btnToggleLayerPanel.classList.toggle('inactive', sidebarCollapsed);
-btnToggleLayerPanel.addEventListener('click', function() {
+// ปุ่ม "แผง Layer" (edge tab ฝั่งซ้าย) — ย่อ/ขยายแผง legend ฝั่งซ้ายของแผนที่เอง
+const tabToggleLayerPanel = document.getElementById('tab-toggle-layerpanel');
+tabToggleLayerPanel.classList.toggle('is-collapsed', sidebarCollapsed);
+tabToggleLayerPanel.addEventListener('click', function() {
     toggleSidebar();
-    btnToggleLayerPanel.classList.toggle('inactive', sidebarCollapsed);
-});
-
-// ปุ่ม "ข้อมูล" บน header — ขอให้ฝั่ง React (InteractiveMap.tsx) สลับแผงข้อมูล factory/checkpoint
-const btnToggleInfoPanel = document.getElementById('btn-toggle-infopanel');
-btnToggleInfoPanel.addEventListener('click', function() {
-    window.parent.postMessage({ type: 'TOGGLE_INFO_PANEL' }, '*');
+    tabToggleLayerPanel.classList.toggle('is-collapsed', sidebarCollapsed);
 });
 
 // รับสัญญาณ toggle จาก parent (ปุ่มใน InteractiveMap.tsx)
@@ -601,16 +682,14 @@ window.addEventListener('message', function(event) {
     var data = event.data;
     if (data && data.type === 'TOGGLE_SIDEBAR') {
         toggleSidebar();
+        tabToggleLayerPanel.classList.toggle('is-collapsed', sidebarCollapsed);
     }
     // รับสัญญาณพับจาก parent (เมื่อคลิก marker)
     if (data && data.type === 'COLLAPSE_LEFT_SIDEBAR') {
         sidebarCollapsed = true;
         sidebarEl.classList.add('collapsed');
+        tabToggleLayerPanel.classList.add('is-collapsed');
         window.parent.postMessage({ type: 'SIDEBAR_STATE', collapsed: true }, '*');
-    }
-    // สถานะแผงข้อมูลฝั่ง React ส่งกลับมา ใช้อัปเดตหน้าตาปุ่ม "ข้อมูล"
-    if (data && data.type === 'INFO_PANEL_STATE') {
-        btnToggleInfoPanel.classList.toggle('inactive', !data.open);
     }
 });
 </script>

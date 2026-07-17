@@ -65,6 +65,9 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
   const [error, setError] = useState<string | null>(null);
   const [points, setPoints] = useState<{ t: number; v: number }[]>([]);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const [zoomRange, setZoomRange] = useState<{ start: number; end: number } | null>(null);
+  const [dragStartX, setDragStartX] = useState<number | null>(null);
+  const [dragCurrentX, setDragCurrentX] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
   const station = stations.find(s => s.id === stationId);
@@ -72,6 +75,7 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
   const loadAndFilter = async () => {
     setLoading(true);
     setError(null);
+    setZoomRange(null);
     try {
       const startYear = new Date(startDate).getFullYear();
       const endYear = new Date(endDate).getFullYear();
@@ -118,13 +122,19 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
 
-  const { pathD, xScale, yScale, yTicks, xTicks } = useMemo(() => {
-    if (points.length === 0) {
-      return { pathD: '', xScale: (t: number) => 0, yScale: (v: number) => 0, yTicks: [] as number[], xTicks: [] as { x: number; label: string }[] };
+  // จุดที่ "มองเห็นอยู่ตอนนี้" — ถ้ามีการซูมอยู่ ให้กรองเฉพาะช่วงเวลาที่ซูมเข้าไป
+  const visiblePoints = useMemo(() => {
+    if (!zoomRange) return points;
+    return points.filter(p => p.t >= zoomRange.start && p.t <= zoomRange.end);
+  }, [points, zoomRange]);
+
+  const { pathD, xScale, yScale, yTicks, xTicks, tMin, tMax } = useMemo(() => {
+    if (visiblePoints.length === 0) {
+      return { pathD: '', xScale: (t: number) => 0, yScale: (v: number) => 0, yTicks: [] as number[], xTicks: [] as { x: number; label: string }[], tMin: 0, tMax: 0 };
     }
-    const tMin = points[0].t;
-    const tMax = points[points.length - 1].t;
-    const vals = points.map(p => p.v).concat(refLines.map(r => r.value));
+    const tMin = visiblePoints[0].t;
+    const tMax = visiblePoints[visiblePoints.length - 1].t;
+    const vals = visiblePoints.map(p => p.v).concat(refLines.map(r => r.value));
     let vMin = Math.min(...vals);
     let vMax = Math.max(...vals);
     if (vMin === vMax) { vMin -= 1; vMax += 1; }
@@ -134,12 +144,12 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
     const xScale = (t: number) => padL + (tMax === tMin ? 0 : ((t - tMin) / (tMax - tMin)) * plotW);
     const yScale = (v: number) => padT + plotH - ((v - vMin) / (vMax - vMin)) * plotH;
 
-    const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xScale(p.t).toFixed(1)} ${yScale(p.v).toFixed(1)}`).join(' ');
+    const pathD = visiblePoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xScale(p.t).toFixed(1)} ${yScale(p.v).toFixed(1)}`).join(' ');
 
     const yTickCount = 5;
     const yTicks = Array.from({ length: yTickCount + 1 }, (_, i) => vMin + ((vMax - vMin) * i) / yTickCount);
 
-    const xTickCount = Math.min(6, points.length);
+    const xTickCount = Math.min(6, visiblePoints.length);
     const xTicks = Array.from({ length: xTickCount }, (_, i) => {
       const t = tMin + ((tMax - tMin) * i) / (xTickCount - 1 || 1);
       const d = new Date(t);
@@ -149,20 +159,70 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
       };
     });
 
-    return { pathD, xScale, yScale, yTicks, xTicks };
-  }, [points, refLines]);
+    return { pathD, xScale, yScale, yTicks, xTicks, tMin, tMax };
+  }, [visiblePoints, refLines]);
+
+  // แปลงพิกัด x บน SVG (viewBox units) กลับเป็นเวลา — ใช้ตอนคำนวณช่วงที่ลากเลือกไว้
+  const xToTime = (svgX: number) => {
+    const clamped = Math.min(Math.max(svgX, padL), W - padR);
+    if (plotW === 0) return tMin;
+    return tMin + ((clamped - padL) / plotW) * (tMax - tMin);
+  };
+
+  const getSvgX = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (!svgRef.current) return 0;
+    const rect = svgRef.current.getBoundingClientRect();
+    return ((e.clientX - rect.left) / rect.width) * W;
+  };
+
+  const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (visiblePoints.length === 0) return;
+    const x = getSvgX(e);
+    setDragStartX(x);
+    setDragCurrentX(x);
+  };
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
-    if (points.length === 0 || !svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    const mouseX = ((e.clientX - rect.left) / rect.width) * W;
+    if (visiblePoints.length === 0 || !svgRef.current) return;
+    const x = getSvgX(e);
+
+    if (dragStartX !== null) {
+      setDragCurrentX(x);
+      return;
+    }
+
     // หาจุดที่ใกล้ mouseX ที่สุด
     let closest = 0, closestDist = Infinity;
-    points.forEach((p, i) => {
-      const d = Math.abs(xScale(p.t) - mouseX);
+    visiblePoints.forEach((p, i) => {
+      const d = Math.abs(xScale(p.t) - x);
       if (d < closestDist) { closestDist = d; closest = i; }
     });
     setHoverIdx(closest);
+  };
+
+  const MIN_DRAG_PX = 8; // ลากน้อยกว่านี้ถือว่าเป็นการคลิกเฉยๆ ไม่ใช่การเลือกซูม
+
+  const commitDragZoom = () => {
+    if (dragStartX !== null && dragCurrentX !== null && Math.abs(dragCurrentX - dragStartX) >= MIN_DRAG_PX) {
+      const x1 = Math.min(dragStartX, dragCurrentX);
+      const x2 = Math.max(dragStartX, dragCurrentX);
+      const start = xToTime(x1);
+      const end = xToTime(x2);
+      if (end > start) setZoomRange({ start, end });
+    }
+    setDragStartX(null);
+    setDragCurrentX(null);
+  };
+
+  const handleMouseUp = () => commitDragZoom();
+
+  const handleMouseLeave = () => {
+    setHoverIdx(null);
+    commitDragZoom();
+  };
+
+  const handleDoubleClick = () => {
+    setZoomRange(null);
   };
 
   return (
@@ -239,9 +299,12 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
             <svg
               ref={svgRef}
               viewBox={`0 0 ${W} ${H}`}
-              className="w-full select-none"
+              className="w-full select-none cursor-crosshair"
+              onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
-              onMouseLeave={() => setHoverIdx(null)}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              onDoubleClick={handleDoubleClick}
             >
               {/* Y grid + labels */}
               {yTicks.map((v, i) => (
@@ -267,28 +330,50 @@ export default function CheckpointTrendChart({ stations, initialStationId, onClo
               <path d={pathD} fill="none" stroke="#2563eb" strokeWidth={1.8} />
 
               {/* Hover crosshair + point */}
-              {hoverIdx !== null && points[hoverIdx] && (
+              {dragStartX === null && hoverIdx !== null && visiblePoints[hoverIdx] && (
                 <g>
                   <line
-                    x1={xScale(points[hoverIdx].t)} x2={xScale(points[hoverIdx].t)}
+                    x1={xScale(visiblePoints[hoverIdx].t)} x2={xScale(visiblePoints[hoverIdx].t)}
                     y1={padT} y2={H - padB}
                     stroke="#94a3b8" strokeWidth={1} strokeDasharray="3,3"
                   />
-                  <circle cx={xScale(points[hoverIdx].t)} cy={yScale(points[hoverIdx].v)} r={4} fill="#2563eb" stroke="#fff" strokeWidth={1.5} />
+                  <circle cx={xScale(visiblePoints[hoverIdx].t)} cy={yScale(visiblePoints[hoverIdx].v)} r={4} fill="#2563eb" stroke="#fff" strokeWidth={1.5} />
                 </g>
+              )}
+
+              {/* Drag-to-zoom selection overlay */}
+              {dragStartX !== null && dragCurrentX !== null && (
+                <rect
+                  x={Math.min(dragStartX, dragCurrentX)}
+                  y={padT}
+                  width={Math.abs(dragCurrentX - dragStartX)}
+                  height={plotH}
+                  fill="#2563eb" fillOpacity={0.12}
+                  stroke="#2563eb" strokeWidth={1} strokeDasharray="4,3"
+                />
               )}
             </svg>
           )}
 
-          {hoverIdx !== null && points[hoverIdx] && !loading && !error && (
-            <div className="mt-2 inline-flex items-center gap-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-              <span className="text-slate-400">{new Date(points[hoverIdx].t).toLocaleString('th-TH')}</span>
-              <span className="font-bold text-blue-700">{station?.name}: {points[hoverIdx].v}</span>
-            </div>
-          )}
+          <div className="flex items-center justify-between mt-2">
+            {hoverIdx !== null && visiblePoints[hoverIdx] && !loading && !error ? (
+              <div className="inline-flex items-center gap-2 text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                <span className="text-slate-400">{new Date(visiblePoints[hoverIdx].t).toLocaleString('th-TH')}</span>
+                <span className="font-bold text-blue-700">{station?.name}: {visiblePoints[hoverIdx].v}</span>
+              </div>
+            ) : <span />}
+            {zoomRange && !loading && !error && (
+              <button
+                onClick={() => setZoomRange(null)}
+                className="text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1 transition-colors"
+              >
+                รีเซ็ตซูม (แสดงช่วงเต็ม)
+              </button>
+            )}
+          </div>
 
           <p className="text-[10px] text-slate-400 leading-tight mt-3">
-            * เส้นประสีคือเกณฑ์มาตรฐานคุณภาพน้ำ ลากเมาส์บนกราฟเพื่อดูค่า ณ เวลานั้นๆ ข้อมูลบันทึกทุก 30 นาที ตั้งแต่ปี 2558 เป็นต้นไป (สถานีส่วนใหญ่ถึงปี 2566 ยกเว้นกระทุ่มแบนที่มีข้อมูลถึงปี 2567 แต่ไม่มีข้อมูลปี 2563) (ช่องที่ไม่มีข้อมูลจะถูกข้ามไป)
+            * เส้นประสีคือเกณฑ์มาตรฐานคุณภาพน้ำ ลากเมาส์บนกราฟเพื่อดูค่า ณ เวลานั้นๆ · ลากคลุมช่วงที่ต้องการเพื่อซูมเข้า ดับเบิลคลิกเพื่อรีเซ็ตซูม · ข้อมูลบันทึกทุก 30 นาที ตั้งแต่ปี 2558 เป็นต้นไป (สถานีส่วนใหญ่ถึงปี 2566 ยกเว้นกระทุ่มแบนที่มีข้อมูลถึงปี 2567 แต่ไม่มีข้อมูลปี 2563) (ช่องที่ไม่มีข้อมูลจะถูกข้ามไป)
           </p>
         </div>
       </div>

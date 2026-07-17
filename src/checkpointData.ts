@@ -69,6 +69,30 @@ export async function loadCheckpointYear(
 }
 
 /**
+ * Converts any parseable timestamp (e.g. "2024-06-15 09:00:00" from the
+ * Excel export, or a full ISO string with seconds/Z) into the EXACT
+ * "YYYY-MM-DDTHH:mm" shape required by <input type="datetime-local">.
+ *
+ * Naively slicing the raw string (e.g. `raw.slice(0, 16)`) is fragile: if
+ * the source uses a space instead of "T" (common straight out of Excel),
+ * the sliced string fails the input's strict format check and the browser
+ * silently blanks the field — even though the value "looks" fine and even
+ * though new Date() happily parses it elsewhere. Going through Date and
+ * re-serializing sidesteps that regardless of the source's exact format.
+ */
+export function toDatetimeLocalValue(rawTimestamp: string): string {
+  const d = new Date(rawTimestamp);
+  if (isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+/**
  * Finds the reading closest to the requested date-time (readings are at
  * ~30-minute intervals but have occasional gaps, so we pick the nearest
  * timestamp rather than requiring an exact match).
@@ -103,6 +127,85 @@ export async function getCheckpointReadingAt(
   const year = new Date(targetIso).getFullYear();
   const readings = await loadCheckpointYear(stationId, year);
   return findClosestReading(readings, targetIso);
+}
+
+/**
+ * Loads each station's latest year file and returns that station's newest
+ * timestamp, keyed by station id. Stations with no data (or a fetch
+ * failure) map to null. Shared by getLatestOverallTimestamp and
+ * getLatestCommonTimestamp so both stay in sync and only fetch once.
+ */
+async function getPerStationLatestTimestamps(): Promise<Record<string, string | null>> {
+  const index = await loadCheckpointIndex();
+  const stationIds = Object.keys(STATION_FILE_CODE);
+
+  const entries = await Promise.all(
+    stationIds.map(async (stationId): Promise<[string, string | null]> => {
+      // index.json's `stations` map is keyed by the short file code (e.g.
+      // "hk"), not the Thai station name used as stationId elsewhere in the
+      // app — so we must translate through STATION_FILE_CODE first.
+      const code = STATION_FILE_CODE[stationId];
+      const years = index.stations[code]?.years ?? [];
+      if (years.length === 0) return [stationId, null];
+      const latestYear = Math.max(...years);
+      try {
+        const readings = await loadCheckpointYear(stationId, latestYear);
+        if (readings.length === 0) return [stationId, null];
+        let max = readings[0].timestamp;
+        for (const r of readings) {
+          if (r.timestamp > max) max = r.timestamp;
+        }
+        return [stationId, max];
+      } catch {
+        return [stationId, null];
+      }
+    })
+  );
+
+  return Object.fromEntries(entries);
+}
+
+/**
+ * Finds the single newest date-time across ALL stations, even if only one
+ * station actually has data that recent. Used by the "ข้อมูลล่าสุด" button
+ * so it always jumps to the true edge of the dataset; stations without a
+ * reading at that moment will simply show as missing in the table (see
+ * checkpointError handling in App.tsx), rather than the button being capped
+ * to whichever station lags furthest behind.
+ */
+export async function getLatestOverallTimestamp(): Promise<string | null> {
+  const perStation = await getPerStationLatestTimestamps();
+  const valid = Object.values(perStation).filter((t): t is string => !!t);
+  if (valid.length === 0) return null;
+
+  let latest = valid[0];
+  for (const t of valid) {
+    if (t > latest) latest = t;
+  }
+  return latest;
+}
+
+/**
+ * Finds the newest date-time for which EVERY station has real data — i.e.
+ * the latest point where the checkpoint table can be fully populated, not
+ * just one station. A browser's native <input type="datetime-local"> "Today"
+ * button always jumps to the real calendar date, which is long after this
+ * historical dataset ends, so the UI needs its own "latest data" anchor
+ * instead of relying on that. Computed dynamically from index.json (rather
+ * than hardcoded) so it stays correct automatically as new year files are
+ * added later.
+ */
+export async function getLatestCommonTimestamp(): Promise<string | null> {
+  const perStation = await getPerStationLatestTimestamps();
+  const valid = Object.values(perStation).filter((t): t is string => !!t);
+  if (valid.length === 0) return null;
+
+  // ค่าที่ "ทุกสถานี" มีข้อมูลจริงพร้อมกัน = จุดที่เก่าที่สุดในบรรดา "ล่าสุดของแต่ละสถานี"
+  let earliestOfLatest = valid[0];
+  for (const t of valid) {
+    if (t < earliestOfLatest) earliestOfLatest = t;
+  }
+  return earliestOfLatest;
 }
 
 // ─────────────────────────────────────────────────────────────────────────

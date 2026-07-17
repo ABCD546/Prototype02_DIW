@@ -19,7 +19,7 @@ import {
   Settings,
   ChevronDown,
   ChevronUp,
-  X
+  ChevronRight
 } from 'lucide-react';
 
 interface InteractiveMapProps {
@@ -28,6 +28,8 @@ interface InteractiveMapProps {
   checkpointReadings: Record<string, CheckpointReading | null>;
   checkpointDateTime: string;
   onCheckpointDateTimeChange: (val: string) => void;
+  onJumpToLatestData?: () => void;
+  loadingLatestDate?: boolean;
   selectedId: string | null;
   onSelectEntity: (id: string, type: 'factory' | 'checkpoint') => void;
   onFactoryParamChange: (factoryId: string, param: 'dischargeBOD' | 'dischargeCOD' | 'actualQ', val: number) => void;
@@ -39,6 +41,8 @@ export default function InteractiveMap({
   checkpointReadings,
   checkpointDateTime,
   onCheckpointDateTimeChange,
+  onJumpToLatestData,
+  loadingLatestDate,
   selectedId,
   onSelectEntity,
   onFactoryParamChange,
@@ -77,22 +81,12 @@ export default function InteractiveMap({
         onSelectEntity(data.id, data.entityType);
         setIsSidebarOpen(true); // แตะหมุดปุ๊บ เปิดแผงข้อมูลให้เห็นทันที แม้ค่าเริ่มต้นบนมือถือจะซ่อนไว้
       }
-
-      // ปุ่ม "ข้อมูล" ในเฮดเดอร์ของ map.html ขอให้ parent สลับแผงข้อมูลด้านขวา
-      if (data.type === 'TOGGLE_INFO_PANEL') {
-        setIsSidebarOpen((prev) => !prev);
-      }
     }
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, [onSelectEntity]);
 
-  // แจ้งสถานะแผงข้อมูลกลับไปให้ map.html เพื่ออัปเดตหน้าตาปุ่ม "ข้อมูล" (active/inactive)
-  useEffect(() => {
-    if (!isMapReady || !iframeRef.current?.contentWindow) return;
-    iframeRef.current.contentWindow.postMessage({ type: 'INFO_PANEL_STATE', open: isSidebarOpen }, '*');
-  }, [isMapReady, isSidebarOpen]);
 
   // ส่ง markers ไปให้ iframe ทุกครั้งที่ข้อมูลเปลี่ยน
   useEffect(() => {
@@ -137,6 +131,17 @@ export default function InteractiveMap({
               className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-mono"
             />
           </label>
+          {onJumpToLatestData && (
+            <button
+              onClick={onJumpToLatestData}
+              disabled={loadingLatestDate}
+              title="ปุ่ม “วันนี้” ของปฏิทินจะพาไปวันที่ปัจจุบันจริงซึ่งไม่มีข้อมูล กดปุ่มนี้แทนเพื่อไปยังข้อมูลใหม่สุดที่มีจริง"
+              className="flex items-center gap-1.5 text-[10px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-wait"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              {loadingLatestDate ? 'กำลังค้นหา...' : 'ข้อมูลล่าสุด'}
+            </button>
+          )}
           <div className="flex flex-wrap gap-2 text-[10px] font-bold text-slate-600 bg-slate-50 p-1.5 rounded-lg border border-slate-200/60 w-fit">
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจแม่น้ำ (ปกติ)
@@ -170,6 +175,8 @@ export default function InteractiveMap({
             className="w-full h-full border-0"
             style={{ zIndex: 1 }}
             title="แผนที่แม่น้ำท่าจีน"
+            allow="fullscreen"
+            allowFullScreen
           />
         </div>
 
@@ -189,14 +196,6 @@ export default function InteractiveMap({
                 <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-mono font-bold tracking-wide">
                   THA CHIN GIS
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setIsSidebarOpen(false)}
-                  className="text-slate-400 hover:text-white transition-colors p-0.5"
-                  title="ปิดแผงข้อมูล"
-                >
-                  <X className="w-4 h-4" />
-                </button>
               </div>
             </div>
 
@@ -470,6 +469,28 @@ export default function InteractiveMap({
             <p>Projection: WGS 84 / UTM zone 47N</p>
           </div>
         </div>
+
+        {/* Edge tab ฝั่งขวา — เปิด/ปิดแผงข้อมูล จุดควบคุมเดียวเหมือนฝั่งซ้าย อยู่นอกแผงเสมอ ไม่โดนแผงบังตอนเปิด */}
+        <button
+          type="button"
+          onClick={() => setIsSidebarOpen((prev) => !prev)}
+          className={`hidden md:flex items-center justify-center absolute top-1/2 -translate-y-1/2 z-30 w-5 h-14 bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-sky-400 transition-all duration-300 ease-in-out rounded-l-lg ${
+            isSidebarOpen ? 'right-64' : 'right-0'
+          }`}
+          title={isSidebarOpen ? 'ซ่อนแผงข้อมูล' : 'แสดงแผงข้อมูล'}
+        >
+          <ChevronRight className={`w-3.5 h-3.5 transition-transform duration-300 ${isSidebarOpen ? '' : 'rotate-180'}`} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsSidebarOpen((prev) => !prev)}
+          className={`flex md:hidden items-center justify-center absolute left-1/2 -translate-x-1/2 z-30 w-14 h-5 bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-sky-400 transition-all duration-300 ease-in-out rounded-t-lg ${
+            isSidebarOpen ? 'bottom-[75%]' : 'bottom-0'
+          }`}
+          title={isSidebarOpen ? 'ซ่อนแผงข้อมูล' : 'แสดงแผงข้อมูล'}
+        >
+          <ChevronUp className={`w-3.5 h-3.5 transition-transform duration-300 ${isSidebarOpen ? 'rotate-180' : ''}`} />
+        </button>
       </div>
     </div>
   );
