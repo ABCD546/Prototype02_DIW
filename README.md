@@ -1,20 +1,31 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Industrial Water Compliance GIS
 
-# Run and deploy your AI Studio app
+แดชบอร์ด GIS สำหรับแสดงตำแหน่งโรงงาน สถานีตรวจวัดคุณภาพน้ำ เครือข่ายแม่น้ำ และข้อมูลตรวจย้อนหลัง
 
-This contains everything you need to run your app locally.
+## เริ่มใช้งาน
 
-View your app in AI Studio: https://ai.studio/apps/78ac4260-d408-4e7d-8137-99dcd94edbd8
+ต้องติดตั้ง Node.js ก่อน จากนั้นรัน:
 
-## Run Locally
+```powershell
+npm install
+npm run dev
+```
 
-**Prerequisites:**  Node.js
+เปิด `http://localhost:3000`
 
+## คำสั่งตรวจสอบ
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```powershell
+npm run lint
+npm run build
+```
+
+## โครงสร้างข้อมูลหลัก
+
+- `public/data/checkpoints/` — ข้อมูลย้อนหลังสถานี แยกตามสถานีและปีเพื่อโหลดเท่าที่ใช้
+- `public/data/factory-registry/` — ทะเบียนโรงงาน แยกตามจังหวัดเพื่อไม่ให้หน้าเว็บโหลดข้อมูลทั้งประเทศพร้อมกัน
+- `src/stationLocations.ts` — ทะเบียนตำแหน่งสถานีตรวจวัด
+- `src/appData.ts` — สถานีที่มีประวัติย้อนหลังและเกณฑ์มาตรฐานที่หน้าเว็บใช้ร่วมกัน
+- `public/map-vector.html` — GIS เวกเตอร์ที่ใช้งานจริง
+
+ข้อมูลที่ผู้ใช้อัปโหลดระหว่างพัฒนาจะเก็บใน Local Storage ของเบราว์เซอร์ จึงควรเชื่อมฐานข้อมูลส่วนกลางก่อนนำไปใช้งานจริงหลายเครื่อง

@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Factory, Checkpoint, CheckpointReading } from '../types';
-import { DIW_STANDARDS } from '../data';
+import { DIW_STANDARDS } from '../appData';
 import { evaluateCheckpointReading } from '../checkpointData';
 import { 
   Info, 
@@ -15,9 +15,6 @@ import {
   Factory as FactoryIcon, 
   MapPin, 
   Compass,
-  Calendar,
-  Settings,
-  ChevronDown,
   ChevronUp,
   ChevronRight
 } from 'lucide-react';
@@ -28,11 +25,18 @@ interface InteractiveMapProps {
   checkpointReadings: Record<string, CheckpointReading | null>;
   checkpointDateTime: string;
   onCheckpointDateTimeChange: (val: string) => void;
+  factoryDateTime: string;
+  onFactoryDateTimeChange: (val: string) => void;
+  factoryYearOptions: { value: string; label: string }[];
+  factoryRoundOptions: { value: string; label: string }[];
+  selectedFactoryInspectionOptions?: { value: string; label: string }[];
+  onJumpToLatestFactoryData?: () => void;
+  hasFactoryHistory?: boolean;
   onJumpToLatestData?: () => void;
   loadingLatestDate?: boolean;
   selectedId: string | null;
   onSelectEntity: (id: string, type: 'factory' | 'checkpoint') => void;
-  onFactoryParamChange: (factoryId: string, param: 'dischargeBOD' | 'dischargeCOD' | 'actualQ', val: number) => void;
+  onRiverSelectionChange?: (riverName: string) => void;
 }
 
 export default function InteractiveMap({
@@ -41,31 +45,39 @@ export default function InteractiveMap({
   checkpointReadings,
   checkpointDateTime,
   onCheckpointDateTimeChange,
+  factoryDateTime,
+  onFactoryDateTimeChange,
+  factoryYearOptions,
+  factoryRoundOptions,
+  selectedFactoryInspectionOptions = [],
+  onJumpToLatestFactoryData,
+  hasFactoryHistory,
   onJumpToLatestData,
   loadingLatestDate,
   selectedId,
   onSelectEntity,
-  onFactoryParamChange,
+  onRiverSelectionChange,
 }: InteractiveMapProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const mapShellRef = useRef<HTMLDivElement>(null);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   // เริ่มต้นซ่อนแผงข้อมูลด้านขวาบนจอมือถือ (กว้างน้อยกว่า 768px) กันบังแผนที่ทั้งจอ — จอใหญ่ยังคงเปิดตามเดิม
   const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
     typeof window === 'undefined' ? true : window.innerWidth >= 768
   );
-  const [isWhatIfOpen, setIsWhatIfOpen] = useState(false);
 
   const selectedFactory   = factories.find((f) => f.id === selectedId);
+  const formatFactoryValue = (value: number | undefined) =>
+    value === undefined || !Number.isFinite(value) ? '—' : value.toFixed(2);
   const selectedCheckpoint = checkpoints.find((cp) => cp.id === selectedId);
   const selectedCheckpointReading = selectedCheckpoint ? checkpointReadings[selectedCheckpoint.id] : null;
   const selectedCheckpointEval = selectedCheckpoint
     ? evaluateCheckpointReading(selectedCheckpoint.id, selectedCheckpointReading)
     : null;
-
-  // Reset what-if panel เมื่อเปลี่ยน entity
-  useEffect(() => {
-    setIsWhatIfOpen(false);
-  }, [selectedId]);
+  const selectedFactoryYearInspectionOptions = selectedFactoryInspectionOptions.filter(
+    (option) => option.value.slice(0, 4) === factoryDateTime.slice(0, 4)
+  );
 
   // รับ postMessage จาก iframe (MAP_READY และ SELECT_ENTITY)
   useEffect(() => {
@@ -81,11 +93,56 @@ export default function InteractiveMap({
         onSelectEntity(data.id, data.entityType);
         setIsSidebarOpen(true); // แตะหมุดปุ๊บ เปิดแผงข้อมูลให้เห็นทันที แม้ค่าเริ่มต้นบนมือถือจะซ่อนไว้
       }
+
+      if (data.type === 'RIVER_SELECTION_CHANGED') {
+        onRiverSelectionChange?.(data.riverName);
+      }
+
+      if (data.type === 'FACTORY_DATETIME_CHANGED') {
+        onFactoryDateTimeChange(data.value);
+      }
+
+      if (data.type === 'CHECKPOINT_DATETIME_CHANGED') {
+        onCheckpointDateTimeChange(data.value);
+      }
+
+      if (data.type === 'JUMP_LATEST_FACTORY') {
+        onJumpToLatestFactoryData?.();
+      }
+
+      if (data.type === 'JUMP_LATEST_STATION') {
+        onJumpToLatestData?.();
+      }
+
+      if (data.type === 'REQUEST_FULLSCREEN') {
+        const shell = mapShellRef.current;
+        if (!shell) return;
+
+        if (document.fullscreenElement === shell) {
+          void document.exitFullscreen();
+        } else {
+          void shell.requestFullscreen();
+        }
+      }
     }
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [onSelectEntity]);
+  }, [onSelectEntity, onRiverSelectionChange, onFactoryDateTimeChange, onCheckpointDateTimeChange, onJumpToLatestFactoryData, onJumpToLatestData]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const active = document.fullscreenElement === mapShellRef.current;
+      setIsFullscreen(active);
+      iframeRef.current?.contentWindow?.postMessage({
+        type: 'FULLSCREEN_STATE',
+        isFullscreen: active,
+      }, '*');
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
 
   // ส่ง markers ไปให้ iframe ทุกครั้งที่ข้อมูลเปลี่ยน
@@ -94,7 +151,9 @@ export default function InteractiveMap({
 
     const checkpointsWithStatus = checkpoints.map((cp) => ({
       ...cp,
-      isViolating: evaluateCheckpointReading(cp.id, checkpointReadings[cp.id]).isViolating,
+      isViolating: checkpointReadings[cp.id]
+        ? evaluateCheckpointReading(cp.id, checkpointReadings[cp.id]).isViolating
+        : null,
     }));
 
     iframeRef.current.contentWindow.postMessage({
@@ -102,47 +161,30 @@ export default function InteractiveMap({
       factories,
       checkpoints: checkpointsWithStatus,
       selectedId,
+      factoryDateTime,
+      checkpointDateTime,
+      factoryYearOptions,
+      factoryRoundOptions,
     }, '*');
-  }, [isMapReady, factories, checkpoints, checkpointReadings, selectedId]);
+  }, [isMapReady, factories, checkpoints, checkpointReadings, selectedId, factoryDateTime, checkpointDateTime, factoryYearOptions, factoryRoundOptions]);
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex flex-col h-full min-h-0 overflow-hidden">
 
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 border-b border-slate-100 pb-3">
-        <div>
+      <div className="flex flex-col md:flex-row md:items-start justify-between gap-3 mb-4 border-b border-slate-100 pb-3">
+        <div className="md:max-w-[470px] shrink-0">
           <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <Radio className="w-4 h-4 text-sky-500 animate-pulse" />
             ระบบแผนที่วิเคราะห์พิกัดดาวเทียมแบบโต้ตอบ (GIS)
           </h3>
-          <p className="text-xs text-slate-500 mt-0.5 font-medium">
-            พื้นที่ลุ่มแม่น้ำท่าจีน ประเทศไทย — จำลองแบบจำลองระบุกรรมสิทธิ์มลพิษและการตรวจอัตลักษณ์ด้วย Open-Source Map Tiles
+          <p className="text-[10px] xl:text-[11px] text-slate-500 mt-0.5 font-medium">
+            <span className="whitespace-nowrap">พื้นที่ลุ่มแม่น้ำท่าจีน ประเทศไทย — จำลองแบบจำลองระบุกรรมสิทธิ์มลพิษและการตรวจอัตลักษณ์ด้วย</span>
+            <br />Open-Source Map Tiles
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-[10px] font-bold text-slate-600 bg-slate-50 border border-slate-200/60 rounded-lg px-2.5 py-1.5">
-            <Calendar className="w-3.5 h-3.5 text-blue-600" />
-            วันที่/เวลาย้อนหลัง:
-            <input
-              type="datetime-local"
-              value={checkpointDateTime}
-              onChange={(e) => onCheckpointDateTimeChange(e.target.value)}
-              min="2015-01-01T00:00"
-              max="2024-12-31T23:59"
-              className="bg-white border border-slate-300 rounded px-1.5 py-0.5 text-[10px] font-mono"
-            />
-          </label>
-          {onJumpToLatestData && (
-            <button
-              onClick={onJumpToLatestData}
-              disabled={loadingLatestDate}
-              title="ปุ่ม “วันนี้” ของปฏิทินจะพาไปวันที่ปัจจุบันจริงซึ่งไม่มีข้อมูล กดปุ่มนี้แทนเพื่อไปยังข้อมูลใหม่สุดที่มีจริง"
-              className="flex items-center gap-1.5 text-[10px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-wait"
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              {loadingLatestDate ? 'กำลังค้นหา...' : 'ข้อมูลล่าสุด'}
-            </button>
-          )}
-          <div className="flex flex-wrap gap-2 text-[10px] font-bold text-slate-600 bg-slate-50 p-1.5 rounded-lg border border-slate-200/60 w-fit">
+        <div className="flex flex-wrap items-center gap-2 md:flex-1 md:justify-end">
+          <div className="flex flex-col gap-1.5 text-[10px] font-bold text-slate-600 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200/60 w-fit md:min-w-[700px]">
+            <div className="flex flex-wrap md:flex-nowrap gap-2">
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจแม่น้ำ (ปกติ)
             </span>
@@ -150,17 +192,34 @@ export default function InteractiveMap({
               <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> จุดคัดตรวจ (ค่าเกินเกณฑ์)
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block border border-white shadow-xs" /> โรงงานผ่านเกณฑ์ปกติ
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block border border-white shadow-xs" /> สถานีอัตโนมัติ (ยังไม่มีข้อมูล)
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> โรงงานปล่อยมลพิษล้นเกณฑ์
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block border border-white shadow-xs" /> สถานีเก็บตัวอย่าง (ยังไม่มีข้อมูล)
             </span>
+            </div>
+            <div className="flex flex-wrap md:flex-nowrap gap-2">
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block border border-white shadow-xs" /> โรงงาน (ผ่านเกณฑ์ปกติ)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> โรงงาน (ปล่อยมลพิษล้นเกณฑ์)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-300 inline-block border border-slate-400 shadow-xs" /> โรงงาน (ยังไม่มีข้อมูลผลตรวจ)
+            </span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Map + Sidebar */}
-      <div className="relative bg-slate-50 rounded-xl overflow-hidden border border-slate-250 shadow-inner flex flex-col md:flex-row" style={{ height: '860px' }}>
+      <div
+        id="gis-map-shell"
+        ref={mapShellRef}
+        className="relative bg-slate-50 rounded-xl overflow-hidden border border-slate-250 shadow-inner flex flex-col md:flex-row"
+        style={{ height: isFullscreen ? '100vh' : '860px', width: isFullscreen ? '100vw' : undefined }}
+      >
 
         {/* iframe แทน Leaflet React */}
         <div className="flex-1 relative min-h-0">
@@ -171,7 +230,7 @@ export default function InteractiveMap({
           )}
           <iframe
             ref={iframeRef}
-            src="/map.html"
+            src="/map-vector.html"
             className="w-full h-full border-0"
             style={{ zIndex: 1 }}
             title="แผนที่แม่น้ำท่าจีน"
@@ -181,9 +240,9 @@ export default function InteractiveMap({
         </div>
 
         {/* Sidebar ขวา — จอใหญ่ลอยทับขวาแผนที่ / จอมือถือเลื่อนขึ้นจากด้านล่างแทน ไม่บังแผนที่ทั้งจอ */}
-        <div className={`absolute inset-x-0 bottom-0 md:inset-x-auto md:bottom-auto md:top-18 md:right-0 md:h-full bg-slate-900/95 text-white flex flex-col justify-between text-xs font-sans overflow-y-auto transition-all duration-300 ease-in-out z-20 rounded-t-2xl md:rounded-none border-t md:border-t-0 border-slate-700 ${
+        <div className={`absolute inset-x-0 bottom-0 md:inset-x-auto md:top-[72px] md:bottom-0 md:right-0 bg-slate-900/95 text-white flex flex-col justify-between text-xs font-sans overflow-y-auto overscroll-contain transition-all duration-300 ease-in-out z-20 rounded-t-2xl md:rounded-none border-t md:border-t-0 border-slate-700 ${
           isSidebarOpen
-            ? 'h-[75%] md:h-full w-full md:w-64 p-4 opacity-100'
+            ? 'h-[75%] md:h-auto w-full md:w-64 p-4 pb-8 opacity-100'
             : 'h-0 md:w-0 p-0 opacity-0 pointer-events-none overflow-hidden'
         }`}>
           <div className="space-y-4">
@@ -213,37 +272,52 @@ export default function InteractiveMap({
                 </div>
 
                 <div className="space-y-2 pt-2 border-t border-slate-800 font-mono text-[11px] text-slate-300">
+                  {selectedFactory.hasMeasurementData ? <>
                   <div className="flex justify-between">
                     <span className="text-slate-400 font-sans">ตำแหน่งที่พิกัด:</span>
                     <span>{selectedFactory.lat.toFixed(4)}°N, {selectedFactory.lon.toFixed(4)}°E</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400 font-sans">ปริมาณระบายจริง:</span>
-                    <span className="font-semibold">{selectedFactory.actualQ.toLocaleString()} ลบ.ม./วัน</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-400 font-sans">ปริมาณปล่อยสุทธิ:</span>
-                    <span className="text-slate-400">{selectedFactory.allowedQ.toLocaleString()} ลบ.ม./วัน</span>
-                  </div>
                   <div className="flex justify-between border-t border-slate-800/50 pt-1.5">
+                    <span className="text-slate-400 font-sans">ค่า pH:</span>
+                    <span className="text-slate-300">{formatFactoryValue(selectedFactory.pH)}</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="text-slate-400 font-sans">ค่า BOD นำปล่อย:</span>
                     <span className={selectedFactory.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX ? "text-rose-400 font-bold" : "text-emerald-400 font-bold"}>
-                      {selectedFactory.dischargeBOD} มก./ลิตร
+                      {formatFactoryValue(selectedFactory.dischargeBOD)} มก./ลิตร
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400 font-sans">ค่า COD นำปล่อย:</span>
                     <span className={selectedFactory.dischargeCOD > DIW_STANDARDS.FACTORY_COD_MAX ? "text-rose-400 font-bold" : "text-emerald-400 font-bold"}>
-                      {selectedFactory.dischargeCOD} มก./ลิตร
+                      {formatFactoryValue(selectedFactory.dischargeCOD)} มก./ลิตร
                     </span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-400 font-sans">ค่าไฟฟ้าเหนี่ยวนำ (EC):</span>
-                    <span className="text-slate-300">{selectedFactory.dischargeEC} µS/cm</span>
+                    <span className="text-slate-400 font-sans">ค่า TSS:</span>
+                    <span className="text-slate-300">{formatFactoryValue(selectedFactory.tss)} มก./ลิตร</span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400 font-sans">ค่า TDS:</span>
+                    <span className="text-slate-300">{formatFactoryValue(selectedFactory.tds)} มก./ลิตร</span>
+                  </div>
+                  </> : <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3 font-sans text-slate-300 space-y-2">
+                    {selectedFactory.testedParameters?.length ? <>
+                      <p className="text-[11px] font-extrabold text-amber-300">มีรายการส่งตรวจ แต่ยังไม่มีค่าผลวิเคราะห์</p>
+                      {selectedFactory.inspectionTimestamp && <p className="text-[10px]"><span className="text-slate-500">วันที่เก็บตัวอย่าง:</span> {new Date(selectedFactory.inspectionTimestamp).toLocaleString('th-TH')}</p>}
+                      {selectedFactory.collectionPoint && <p className="text-[10px]"><span className="text-slate-500">จุดเก็บ:</span> {selectedFactory.collectionPoint}</p>}
+                      <div>
+                        <p className="text-[10px] text-slate-500 mb-1">พารามิเตอร์ที่ส่งตรวจ:</p>
+                        <div className="flex flex-wrap gap-1">
+                          {selectedFactory.testedParameters.map((parameter) => <span key={parameter} className="rounded bg-slate-800 px-1.5 py-1 text-[9px] text-slate-300">{parameter}</span>)}
+                        </div>
+                      </div>
+                      <p className="text-[9px] text-slate-500 border-t border-slate-700 pt-2">ช่อง “ค่าวิเคราะห์” ในไฟล์ต้นทางเป็น “-” จึงยังไม่มีตัวเลขสำหรับแสดงหรือประเมินเกณฑ์</p>
+                    </> : <p className="text-center text-[11px]">ยังไม่มีข้อมูลผลตรวจวัด<br />กรุณาอัปโหลดข้อมูลโรงงานก่อน</p>}
+                  </div>}
                 </div>
 
-                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
+                {selectedFactory.hasMeasurementData && <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
                   <span className="text-[9px] text-slate-400 font-bold block">🚨 บัญชีสารทำละลายและวัตถุเจตนาอันตรายในรอบดำเนินการ:</span>
                   <ul className="text-[10px] text-slate-300 font-sans space-y-1 list-disc pl-3">
                     {selectedFactory.id === 'TTC01' && (<>
@@ -272,9 +346,9 @@ export default function InteractiveMap({
                       <li>แก๊สไข่เน่าละลายจากบ่อเก็บตกตะกอนสถิตย์</li>
                     </>)}
                   </ul>
-                </div>
+                </div>}
 
-                <div className="mt-3">
+                {selectedFactory.hasMeasurementData && <div className="mt-3">
                   <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                     selectedFactory.status === 'Violation'
                       ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
@@ -282,87 +356,31 @@ export default function InteractiveMap({
                   }`}>
                     {selectedFactory.status === 'Violation' ? '🚨 ตรวจเจอมลพิษล้นเกณฑ์' : '🛡️ สอดคล้องตามเกณฑ์ข้อบังคับ'}
                   </span>
-                </div>
+                </div>}
 
-                {/* หัวข้อพับเก็บ: จำลองข้อมูลโรงงาน (What-If) — ซ่อนไว้ก่อน กดเปิดจึงแสดงสไลเดอร์ */}
-                <div className="border-t border-slate-800 pt-3">
-                  <button
-                    type="button"
-                    onClick={() => setIsWhatIfOpen((prev) => !prev)}
-                    className="w-full flex items-center justify-between gap-2 text-[10px] font-black uppercase tracking-wider text-slate-300 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <Settings className="w-3.5 h-3.5 text-sky-400" />
-                      จำลองข้อมูลโรงงาน (What-If)
-                    </span>
-                    {isWhatIfOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                  </button>
-
-                  {isWhatIfOpen && (
-                    <div className="mt-3 bg-slate-950 p-2.5 rounded-lg border border-slate-800 space-y-3">
-                      {/* Effluent BOD slider */}
-                      <div className="space-y-0.5">
-                        <div className="flex justify-between text-[9px] text-slate-400">
-                          <span>ความเข้มข้น BOD น้ำทิ้ง:</span>
-                          <span className={`font-mono font-bold ${
-                            selectedFactory.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX ? 'text-rose-400' : 'text-emerald-400'
-                          }`}>
-                            {selectedFactory.dischargeBOD} มก./ลิตร
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={5}
-                          max={250}
-                          step={5}
-                          value={selectedFactory.dischargeBOD}
-                          onChange={(e) => onFactoryParamChange(selectedFactory.id, 'dischargeBOD', parseInt(e.target.value))}
-                          className="w-full h-1 accent-sky-500 bg-slate-800 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-
-                      {/* Effluent COD slider */}
-                      <div className="space-y-0.5">
-                        <div className="flex justify-between text-[9px] text-slate-400">
-                          <span>ความเข้มข้น COD น้ำทิ้ง:</span>
-                          <span className={`font-mono font-bold ${
-                            selectedFactory.dischargeCOD > DIW_STANDARDS.FACTORY_COD_MAX ? 'text-rose-400' : 'text-emerald-400'
-                          }`}>
-                            {selectedFactory.dischargeCOD} มก./ลิตร
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={20}
-                          max={800}
-                          step={10}
-                          value={selectedFactory.dischargeCOD}
-                          onChange={(e) => onFactoryParamChange(selectedFactory.id, 'dischargeCOD', parseInt(e.target.value))}
-                          className="w-full h-1 accent-sky-500 bg-slate-800 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
-
-                      {/* Effluent Q slider */}
-                      <div className="space-y-0.5">
-                        <div className="flex justify-between text-[9px] text-slate-400">
-                          <span>ปริมาตรปล่อยน้ำเสีย:</span>
-                          <span className="font-mono font-bold text-slate-200">
-                            {selectedFactory.actualQ.toLocaleString()} ลบ.ม./วัน
-                          </span>
-                        </div>
-                        <input
-                          type="range"
-                          min={100}
-                          max={10000}
-                          step={100}
-                          value={selectedFactory.actualQ}
-                          onChange={(e) => onFactoryParamChange(selectedFactory.id, 'actualQ', parseInt(e.target.value))}
-                          className="w-full h-1 accent-sky-500 bg-slate-800 rounded-lg appearance-none cursor-pointer"
-                        />
-                      </div>
+                <div className="mt-3 border-t border-slate-800 pt-3">
+                  <p className="text-[10px] font-extrabold text-slate-300 mb-2">
+                    รอบตรวจปี {Number(factoryDateTime.slice(0, 4)) + 543} ของโรงงานนี้
+                  </p>
+                  {selectedFactoryYearInspectionOptions.length > 0 ? (
+                    <div className="flex flex-col gap-1.5">
+                      {selectedFactoryYearInspectionOptions.map((option) => {
+                        const active = option.value.slice(0, 7) === factoryDateTime.slice(0, 7);
+                        return <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => onFactoryDateTimeChange(option.value)}
+                          className={`text-left rounded-lg border px-2.5 py-2 text-[10px] font-bold transition-colors ${active ? 'border-sky-500 bg-sky-500/15 text-sky-200' : 'border-slate-700 bg-slate-900/60 text-slate-300 hover:border-slate-500'}`}
+                        >
+                          {option.label.replace(/^ปี \d+\s*·\s*/, '')}
+                        </button>;
+                      })}
                     </div>
+                  ) : (
+                    <p className="rounded-lg border border-slate-700 bg-slate-900/60 p-2.5 text-[10px] text-slate-400">ยังไม่พบประวัติรอบตรวจของโรงงานนี้</p>
                   )}
                 </div>
+
               </div>
 
             ) : selectedCheckpoint ? (
@@ -374,18 +392,25 @@ export default function InteractiveMap({
                     <MapPin className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="font-extrabold text-sm text-slate-100">{selectedCheckpoint.id}</h4>
+                    <h4 className="font-extrabold text-sm text-slate-100">{selectedCheckpoint.code ?? selectedCheckpoint.id}</h4>
                     <p className="text-[11px] text-slate-300 font-bold leading-tight mt-0.5">{selectedCheckpoint.name}</p>
+                    {selectedCheckpoint.stationType && (
+                      <p className="text-[10px] text-sky-300 mt-1">
+                        {selectedCheckpoint.stationType === 'automatic' ? 'สถานีตรวจวัดอัตโนมัติ' : selectedCheckpoint.stationType === 'manual' ? 'สถานีตรวจแบบเก็บตัวอย่าง' : 'สถานีข้อมูลย้อนหลัง'}
+                      </p>
+                    )}
                   </div>
                 </div>
 
-                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                {selectedCheckpointReading ? <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                   selectedCheckpointEval?.isViolating
                     ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 }`}>
                   {selectedCheckpointEval?.isViolating ? '🚨 ค่าเกินเกณฑ์มาตรฐาน' : '🛡️ ปกติ ตามเกณฑ์'}
-                </span>
+                </span> : <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-700/60 text-slate-300">
+                  📍 แสดงเฉพาะตำแหน่งสถานี
+                </span>}
 
                 <div className="space-y-3">
                   <div className="space-y-2 pt-1 border-t border-slate-800 font-mono text-[11px] text-slate-350">
@@ -393,6 +418,14 @@ export default function InteractiveMap({
                       <span className="text-slate-500 font-sans">ตำแหน่งที่พิกัด:</span>
                       <span className="text-slate-300">{selectedCheckpoint.lat.toFixed(4)}°N, {selectedCheckpoint.lon.toFixed(4)}°E</span>
                     </div>
+                    {selectedCheckpoint.riverName && <div className="flex justify-between gap-3">
+                      <span className="text-slate-500 font-sans">แหล่งน้ำ:</span>
+                      <span className="text-slate-300 text-right">{selectedCheckpoint.riverName}</span>
+                    </div>}
+                    {selectedCheckpoint.province && <div className="flex justify-between gap-3">
+                      <span className="text-slate-500 font-sans">จังหวัด:</span>
+                      <span className="text-slate-300 text-right">{selectedCheckpoint.province}</span>
+                    </div>}
                     {selectedCheckpointReading ? (
                       <>
                         <div className="flex justify-between border-t border-slate-800/50 pt-1.5">
@@ -425,7 +458,7 @@ export default function InteractiveMap({
                       </>
                     ) : (
                       <p className="text-[10px] text-slate-500 pt-1.5 border-t border-slate-800/50">
-                        ไม่มีข้อมูลบันทึกในช่วงวันที่/เวลาที่เลือกไว้บนแดชบอร์ด
+                        จุดนี้นำเข้าเฉพาะตำแหน่ง จึงยังไม่มีค่าคุณภาพน้ำแสดงในระบบ
                       </p>
                     )}
                   </div>
@@ -442,14 +475,14 @@ export default function InteractiveMap({
                     </div>
                   )}
 
-                  <div className="bg-slate-950 p-2 rounded-lg border border-slate-800 text-[10px] text-slate-400 font-sans">
+                  {selectedCheckpointReading && <div className="bg-slate-950 p-2 rounded-lg border border-slate-800 text-[10px] text-slate-400 font-sans">
                     <div className="flex gap-1 items-start">
                       <Info className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
                       <span>
                         เกณฑ์: DO &ge; 2.0 มก./ลิตร, pH 6.5-8.5, อุณหภูมิไม่เกิน 35°C — EC ไม่ประเมินที่นครชัยศรี/กระทุ่มแบน เนื่องจากมีน้ำเค็มหนุนตามธรรมชาติ ค่าที่แสดงมาจากไฟล์ข้อมูลย้อนหลังจริง เปลี่ยนวันที่/เวลาได้ที่ตารางจุดตรวจด้านล่างแดชบอร์ด
                       </span>
                     </div>
-                  </div>
+                  </div>}
                 </div>
               </div>
 

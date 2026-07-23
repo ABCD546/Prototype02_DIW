@@ -3,81 +3,78 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { Factory, Checkpoint, CheckpointReading } from './types';
-import { INITIAL_FACTORIES, INITIAL_CHECKPOINTS, SCENARIOS, DIW_STANDARDS } from './data';
-import { getViolatedFactories } from './utils';
-import { getCheckpointReadingAt, getLatestCommonTimestamp, getLatestOverallTimestamp, toDatetimeLocalValue } from './checkpointData';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Factory, Checkpoint, CheckpointReading, FactoryImportRecord, StationImportRecord } from './types';
+import { HISTORICAL_STATIONS, DIW_STANDARDS } from './appData';
+import { ADDITIONAL_STATION_LOCATIONS } from './stationLocations';
+import { getCheckpointReadingAt, loadCheckpointIndex, loadCheckpointYear, STATION_FILE_CODE } from './checkpointData';
 import InteractiveMap from './components/InteractiveMap';
 import CheckpointTrendChart from './components/CheckpointTrendChart';
-import { 
+import FactoryTrendChart from './components/FactoryTrendChart';
+import StationProfileChart from './components/StationProfileChart';
+import FactoryDataUpload from './components/FactoryDataUpload';
+import {
   ShieldCheck, 
   Table, 
   Calendar,
   LineChart,
+  GitCompareArrows,
 } from 'lucide-react';
 
+const BASE_STATIONS: Checkpoint[] = HISTORICAL_STATIONS.map((station) => ({
+  ...station,
+  stationType: station.stationType ?? 'historical',
+  hasMeasurementData: true,
+}));
+const BASE_STATION_CODES = new Set(BASE_STATIONS.map((station) => station.code).filter(Boolean));
+const REGISTERED_STATIONS: Checkpoint[] = [
+  ...BASE_STATIONS,
+  ...ADDITIONAL_STATION_LOCATIONS.filter((station) => !station.code || !BASE_STATION_CODES.has(station.code)),
+];
+const stationKey = (value?: string) => String(value ?? '').trim().toLocaleLowerCase('th').replace(/^สถานี\s*/, '').replace(/[\s._-]+/g, '');
+const resolveRegisteredStation = (record: StationImportRecord) => {
+  const codeKey = stationKey(record.stationCode);
+  const nameKey = stationKey(record.stationName);
+  const codeMatches = codeKey ? REGISTERED_STATIONS.filter((station) => stationKey(station.code) === codeKey) : [];
+  if (codeMatches.length === 1) return codeMatches[0];
+  if (codeMatches.length > 1) {
+    const namedCodeMatch = codeMatches.find((station) => stationKey(station.name) === nameKey);
+    if (namedCodeMatch) return namedCodeMatch;
+  }
+  return REGISTERED_STATIONS.find((station) =>
+    stationKey(station.id) === nameKey
+    || stationKey(station.code) === nameKey
+    || stationKey(station.name) === nameKey
+  );
+};
+
 export default function App() {
-  const [selectedScenarioId, setSelectedScenarioId] = useState<number>(2); // Default to Scenario 2 (Community Pollution Defense)
-  const [riverFlowRate, setRiverFlowRate] = useState<number>(90000); // Default corresponding to Scenario 2
-  const [riverBOD, setRiverBOD] = useState<number>(1.5);
-  const [riverCOD, setRiverCOD] = useState<number>(4.0);
-  const [riverFecal, setRiverFecal] = useState<number>(5500);
-  const [riverNitrogen, setRiverNitrogen] = useState<number>(0.8);
-  const [riverEC, setRiverEC] = useState<number>(280);
-  const [factories, setFactories] = useState<Factory[]>(INITIAL_FACTORIES);
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>('TTC02'); // Default selection for insight card
+  const [factories] = useState<Factory[]>([]);
+  const [factoryHistory, setFactoryHistory] = useState<FactoryImportRecord[]>(() => {
+    try {
+      localStorage.removeItem('diw_factory_history');
+      return JSON.parse(localStorage.getItem('diw_factory_history_ereport_v1') || '[]');
+    }
+    catch { return []; }
+  });
+  const [stationHistory, setStationHistory] = useState<StationImportRecord[]>(() => {
+    try { return JSON.parse(localStorage.getItem('diw_station_history') || '[]'); }
+    catch { return []; }
+  });
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [selectedFactoryId, setSelectedFactoryId] = useState<string | null>(null);
+  const [selectedRiverName, setSelectedRiverName] = useState<string>('__all__');
+  const [factoryDateTime, setFactoryDateTime] = useState<string>('2026-07-22T00:00');
 
   // Checkpoint (CP) historical data: date-time picker + loaded readings per station
   const [checkpointDateTime, setCheckpointDateTime] = useState<string>('2023-06-15T09:00');
   const [checkpointReadings, setCheckpointReadings] = useState<Record<string, CheckpointReading | null>>({});
   const [loadingCheckpoints, setLoadingCheckpoints] = useState<boolean>(false);
+  const [loadingLatestDate, setLoadingLatestDate] = useState<boolean>(false);
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
   const [trendChartStationId, setTrendChartStationId] = useState<string | null>(null);
-  const [loadingLatestDate, setLoadingLatestDate] = useState<boolean>(false);
-
-  // Fetch baseline scenario context
-  const currentScenario = SCENARIOS.find(s => s.id === selectedScenarioId) || SCENARIOS[1];
-
-  // Restores defaults when scenario changes
-  useEffect(() => {
-    setRiverFlowRate(currentScenario.riverFlowRate);
-    setRiverBOD(currentScenario.riverBOD);
-    setRiverCOD(currentScenario.riverCOD);
-    setRiverFecal(currentScenario.riverFecal);
-    setRiverNitrogen(currentScenario.riverNitrogen);
-    setRiverEC(currentScenario.riverEC);
-    
-    // Apply factory scenario-specific overrides on top of clean baselines
-    const calcStatus = (f: { industryType: string; dischargeBOD: number; dischargeCOD: number }) => {
-      const isTextile = f.industryType.includes('สิ่งทอ') || f.industryType.includes('ฟอกย้อม');
-      const codMax = isTextile ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
-      return (f.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX || f.dischargeCOD > codMax)
-        ? 'Violation' as const
-        : 'Compliant' as const;
-    };
-
-    const updatedFactories = INITIAL_FACTORIES.map(factory => {
-      const override = currentScenario.factoriesOverride[factory.id];
-      if (override) {
-        const merged = { ...factory, ...override };
-        return { ...merged, status: override.status || calcStatus(merged) };
-      }
-      const base = {
-        ...factory,
-        dischargeBOD: INITIAL_FACTORIES.find(f => f.id === factory.id)?.dischargeBOD || 15,
-        dischargeCOD: INITIAL_FACTORIES.find(f => f.id === factory.id)?.dischargeCOD || 45,
-      };
-      return { ...base, status: calcStatus(base) };
-    });
-
-    setFactories(updatedFactories);
-  }, [selectedScenarioId, currentScenario]);
-
-  // Handle manual sidebar scenario selection
-  const handleSelectScenario = (id: number) => {
-    setSelectedScenarioId(id);
-  };
+  const [factoryTrendId, setFactoryTrendId] = useState<string | null>(null);
+  const [showProfileChart, setShowProfileChart] = useState<boolean>(false);
 
   // Load historical checkpoint readings (pH/DO/EC/Temp) for every station
   // whenever the selected date-time changes.
@@ -88,7 +85,7 @@ export default function App() {
     const isoTarget = checkpointDateTime.length === 16 ? `${checkpointDateTime}:00` : checkpointDateTime;
 
     Promise.all(
-      INITIAL_CHECKPOINTS.map(async (cp) => {
+      HISTORICAL_STATIONS.map(async (cp) => {
         try {
           const reading = await getCheckpointReadingAt(cp.id, isoTarget);
           return [cp.id, reading] as const;
@@ -113,97 +110,305 @@ export default function App() {
     return () => { cancelled = true; };
   }, [checkpointDateTime]);
 
-  // เมื่อโหลดแอปครั้งแรก ให้ปรับวันที่/เวลาไปยัง "จุดล่าสุดที่ทุกสถานีมีข้อมูลจริงพร้อมกัน"
-  // แทนค่า default ที่ตั้งไว้กลางปี — ผู้ใช้เปิดมาจะเห็นข้อมูลใหม่สุดที่มีทันที
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const latest = await getLatestCommonTimestamp();
-      if (!cancelled && latest) {
-        const formatted = toDatetimeLocalValue(latest);
-        if (formatted) setCheckpointDateTime(formatted);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ปุ่ม "ข้อมูลล่าสุด" — ปุ่ม "วันนี้" ของ browser (native datetime-local picker)
-  // จะกระโดดไปวันที่ปฏิทินจริงเสมอ ซึ่งอยู่นอกช่วงข้อมูลย้อนหลังที่มี จึงต้องมีปุ่มนี้แยกต่างหาก
-  // ใช้จุดล่าสุด "สุดๆ" ของข้อมูลทั้งหมด (ไม่ใช่จุดที่ทุกสถานีมีร่วมกัน) ตามที่ผู้ใช้เลือก —
-  // สถานีที่ยังไม่มีข้อมูลถึงจุดนั้นจะขึ้นแจ้งเตือนใน checkpointError แทน
-  const handleJumpToLatestData = async () => {
+  const handleJumpToLatestCheckpointData = async () => {
     setLoadingLatestDate(true);
+    setCheckpointError(null);
     try {
-      const latest = await getLatestOverallTimestamp();
-      if (latest) {
-        const formatted = toDatetimeLocalValue(latest);
-        if (formatted) setCheckpointDateTime(formatted);
-      }
+      const index = await loadCheckpointIndex();
+      const stationYears = HISTORICAL_STATIONS.map((cp) => {
+        const code = STATION_FILE_CODE[cp.id];
+        return new Set(index.stations[code]?.years ?? []);
+      });
+      const commonYears = [...stationYears[0]].filter((year) =>
+        stationYears.every((years) => years.has(year))
+      );
+      const latestCommonYear = Math.max(...commonYears);
+      if (!Number.isFinite(latestCommonYear)) throw new Error('ไม่พบปีข้อมูลที่ทุกสถานีมีร่วมกัน');
+
+      const readingsByStation = await Promise.all(
+        HISTORICAL_STATIONS.map((cp) => loadCheckpointYear(cp.id, latestCommonYear))
+      );
+      const latestTimestamps = readingsByStation.map((readings) =>
+        readings.reduce((latest, reading) => reading.timestamp > latest ? reading.timestamp : latest, '')
+      );
+      // Use the earliest of each station's latest timestamp so every station
+      // still has data available at the selected dashboard time.
+      const latestSharedTimestamp = latestTimestamps.reduce((earliest, timestamp) =>
+        !earliest || timestamp < earliest ? timestamp : earliest, ''
+      );
+      if (!latestSharedTimestamp) throw new Error('ไม่พบเวลาบันทึกล่าสุด');
+      setCheckpointDateTime(latestSharedTimestamp.slice(0, 16));
+    } catch (error) {
+      console.error('Failed to find latest shared checkpoint data:', error);
+      setCheckpointError('ไม่สามารถค้นหาข้อมูลล่าสุดที่ทุกสถานีมีร่วมกันได้');
     } finally {
       setLoadingLatestDate(false);
     }
   };
 
-  // Handle manual hydrology slider manipulation
-  const handleRiverFlowRateChange = (val: number) => {
-    setRiverFlowRate(val);
-  };
-
-  // Handle manual factory discharge alterations
-  const handleFactoryParamChange = (
-    factoryId: string, 
-    param: 'dischargeBOD' | 'dischargeCOD' | 'actualQ', 
-    val: number
-  ) => {
-    setFactories(prev => prev.map(f => {
-      if (f.id === factoryId) {
-        const updated = { ...f, [param]: val };
-        // Instantly recalculate target compliance status
-        const isTextile = updated.industryType.includes('สิ่งทอ') || updated.industryType.includes('ฟอกย้อม');
-        const codMax = isTextile ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
-        const isBODViolation = updated.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX;
-        const isCODViolation = updated.dischargeCOD > codMax;
-        updated.status = (isBODViolation || isCODViolation) ? 'Violation' : 'Compliant';
-        return updated;
-      }
-      return f;
-    }));
-  };
-
-  // Handles manual resets of the active layout
-  const handleResetToScenarioDefaults = () => {
-    setRiverFlowRate(currentScenario.riverFlowRate);
-    setRiverBOD(currentScenario.riverBOD);
-    setRiverCOD(currentScenario.riverCOD);
-    setRiverFecal(currentScenario.riverFecal);
-    setRiverNitrogen(currentScenario.riverNitrogen);
-    setRiverEC(currentScenario.riverEC);
-    const updatedFactories = INITIAL_FACTORIES.map(factory => {
-      const override = currentScenario.factoriesOverride[factory.id];
-      if (override) {
-        const merged = { ...factory, ...override };
-        return { ...merged, status: override.status || calcStatus(merged) };
-      }
-      const base = {
-        ...factory,
-        dischargeBOD: INITIAL_FACTORIES.find(f => f.id === factory.id)?.dischargeBOD || 15,
-        dischargeCOD: INITIAL_FACTORIES.find(f => f.id === factory.id)?.dischargeCOD || 45,
-      };
-      return { ...base, status: calcStatus(base) };
-    });
-    setFactories(updatedFactories);
-  };
-
   // Checkpoints are now a static list of real monitoring stations — their
   // water-quality values come from historical CSV/Excel readings (loaded
   // above), not from a factory mass-balance simulation.
-  const checkpoints = INITIAL_CHECKPOINTS;
-  const violatedFactories = getViolatedFactories(factories);
+  const checkpoints = useMemo(() => {
+    const map = new Map(REGISTERED_STATIONS.map((station) => [station.id, station]));
+    stationHistory.forEach((record) => {
+      const registered = resolveRegisteredStation(record);
+      if (registered) {
+        map.set(registered.id, { ...registered, hasMeasurementData: true });
+      } else if (record.lat !== null && record.lon !== null) {
+        map.set(record.stationName, { id: record.stationName, name: record.stationName, lat: record.lat, lon: record.lon, code: record.stationCode, stationType: 'uploaded', hasMeasurementData: true });
+      }
+    });
+    return [...map.values()];
+  }, [stationHistory]);
+  useEffect(() => {
+    localStorage.setItem('diw_factory_history_ereport_v1', JSON.stringify(factoryHistory));
+  }, [factoryHistory]);
+  useEffect(() => {
+    localStorage.setItem('diw_station_history', JSON.stringify(stationHistory));
+  }, [stationHistory]);
+
+  const displayCheckpointReadings = useMemo(() => {
+    const result = { ...checkpointReadings };
+    const targetTime = new Date(checkpointDateTime).getTime();
+    const grouped = new Map<string, StationImportRecord[]>();
+    stationHistory.forEach((record) => {
+      const stationId = resolveRegisteredStation(record)?.id ?? record.stationName;
+      if (!grouped.has(stationId)) grouped.set(stationId, []);
+      grouped.get(stationId)!.push(record);
+    });
+    grouped.forEach((records, stationName) => {
+      const closest = records.reduce((best, record) => Math.abs(new Date(record.timestamp).getTime() - targetTime) < Math.abs(new Date(best.timestamp).getTime() - targetTime) ? record : best);
+      result[stationName] = { timestamp: closest.timestamp, values: { pH: closest.pH, DO: closest.do, EC: closest.ec, Temp: closest.temp } };
+    });
+    return result;
+  }, [checkpointReadings, stationHistory, checkpointDateTime]);
+
+  const displayFactories = useMemo(() => {
+    const selectedMonth = factoryDateTime.slice(0, 7);
+    const selectedYear = factoryDateTime.slice(0, 4);
+    const isAnnualSummary = factoryDateTime.slice(5, 7) === '00';
+    const grouped = new Map<string, FactoryImportRecord[]>();
+    factoryHistory.filter((record) => isAnnualSummary
+      ? record.timestamp.slice(0, 4) === selectedYear
+      : record.timestamp.slice(0, 7) === selectedMonth
+    ).forEach((record) => {
+      if (!grouped.has(record.factoryId)) grouped.set(record.factoryId, []);
+      grouped.get(record.factoryId)!.push(record);
+    });
+    const closestRecord = (records: FactoryImportRecord[]) => records.reduce((latest, record) => record.timestamp > latest.timestamp ? record : latest);
+    const annualRecord = (records: FactoryImportRecord[]): FactoryImportRecord => {
+      const latest = closestRecord(records);
+      const average = (key: 'pH' | 'bod' | 'cod' | 'tss' | 'tds') => {
+        const values = records.map((record) => record[key]).filter((value): value is number => value !== null);
+        return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+      };
+      return { ...latest, pH: average('pH'), bod: average('bod'), cod: average('cod'), tss: average('tss'), tds: average('tds') };
+    };
+    const toFactory = (record: FactoryImportRecord, base?: Factory): Factory => {
+      const isTextile = record.industryType.includes('สิ่งทอ') || record.industryType.includes('ฟอกย้อม');
+      const codMax = isTextile ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
+      const hasMeasurementData = [record.pH, record.bod, record.cod, record.tss, record.tds].some((value) => value !== null);
+      return {
+        ...(base ?? {} as Factory), id: record.factoryId, name: record.name, industryType: record.industryType,
+        lat: record.lat ?? base?.lat ?? 0, lon: record.lon ?? base?.lon ?? 0, allowedQ: base?.allowedQ ?? 0, actualQ: base?.actualQ ?? 0,
+        dischargeBOD: record.bod ?? 0, dischargeCOD: record.cod ?? 0, dischargeEC: record.tds ?? 0,
+        pH: record.pH ?? undefined, tss: record.tss ?? undefined, tds: record.tds ?? undefined,
+        status: (record.bod ?? 0) > DIW_STANDARDS.FACTORY_BOD_MAX || (record.cod ?? 0) > codMax ? 'Violation' : 'Compliant',
+        hasMeasurementData,
+        testedParameters: record.testedParameters,
+        inspectionTimestamp: record.timestamp,
+        collectionPoint: record.collectionPoint,
+      };
+    };
+    const result = factories.map((factory) => {
+      const records = grouped.get(factory.id);
+      if (!records?.length) return factory;
+      const summary = toFactory(isAnnualSummary ? annualRecord(records) : closestRecord(records), factory);
+      summary.inspectionCount = records.length;
+      summary.isAnnualSummary = isAnnualSummary;
+      if (isAnnualSummary) {
+        summary.status = records.some((record) => {
+          const codMax = record.industryType.includes('สิ่งทอ') || record.industryType.includes('ฟอกย้อม')
+            ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
+          return (record.bod ?? 0) > DIW_STANDARDS.FACTORY_BOD_MAX || (record.cod ?? 0) > codMax;
+        }) ? 'Violation' : 'Compliant';
+      }
+      return summary;
+    });
+    const existingIds = new Set(result.map((factory) => factory.id));
+    grouped.forEach((records, id) => {
+      const record = isAnnualSummary ? annualRecord(records) : closestRecord(records);
+      if (!existingIds.has(id) && records.length && record.lat != null && record.lon != null) {
+        const factory = toFactory(record);
+        factory.inspectionCount = records.length;
+        factory.isAnnualSummary = isAnnualSummary;
+        if (isAnnualSummary) {
+          factory.status = records.some((item) => {
+            const codMax = item.industryType.includes('สิ่งทอ') || item.industryType.includes('ฟอกย้อม')
+              ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
+            return (item.bod ?? 0) > DIW_STANDARDS.FACTORY_BOD_MAX || (item.cod ?? 0) > codMax;
+          }) ? 'Violation' : 'Compliant';
+        }
+        result.push(factory);
+      }
+    });
+    if (selectedFactoryId && !result.some((factory) => factory.id === selectedFactoryId)) {
+      const history = factoryHistory.filter((record) => record.factoryId === selectedFactoryId);
+      if (history.length) {
+        const latest = closestRecord(history);
+        if (latest.lat != null && latest.lon != null) {
+          result.push({ ...toFactory(latest), hasMeasurementData: false, status: 'Compliant' });
+        }
+      }
+    }
+    return result;
+  }, [factories, factoryHistory, factoryDateTime, selectedFactoryId]);
+
+  const factoryYearOptions = useMemo(() => {
+    const historyYears = [...new Set(factoryHistory.map((record) => Number(record.timestamp.slice(0, 4))))].filter(Number.isFinite).sort((a, b) => a - b);
+    return historyYears.map((year) => ({
+      value: String(year),
+      label: `ปี ${year + 543}`,
+    }));
+  }, [factoryHistory]);
+
+  const factoryRoundOptions = useMemo(() => {
+    const monthNames = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+    const selectedYear = factoryDateTime.slice(0, 4);
+    const availableMonths = new Set(
+      factoryHistory
+        .filter((record) => record.timestamp.slice(0, 4) === selectedYear)
+        .map((record) => record.timestamp.slice(5, 7))
+    );
+    if (availableMonths.size === 0) return [];
+    return [
+      { value: '00', label: 'ภาพรวมทั้งปี' },
+      ...monthNames
+        .map((monthName, index) => {
+          const month = String(index + 1).padStart(2, '0');
+          return { value: month, label: `ครั้งที่ ${index + 1} (${monthName})` };
+        })
+        .filter((option) => availableMonths.has(option.value)),
+    ];
+  }, [factoryHistory, factoryDateTime]);
+
+  useEffect(() => {
+    const selectedYear = factoryDateTime.slice(0, 4);
+    const selectedRound = factoryDateTime.slice(5, 7);
+    if (factoryYearOptions.length > 0 && !factoryYearOptions.some((option) => option.value === selectedYear)) {
+      const latestYear = factoryYearOptions[factoryYearOptions.length - 1].value;
+      setFactoryDateTime(`${latestYear}-00-01T00:00`);
+    } else if (factoryRoundOptions.length > 0 && !factoryRoundOptions.some((option) => option.value === selectedRound)) {
+      setFactoryDateTime(`${selectedYear}-00-01T00:00`);
+    }
+  }, [factoryYearOptions, factoryRoundOptions, factoryDateTime]);
+
+  const factoriesWithHistory = useMemo(() => {
+    const ids = new Set(factoryHistory.map((record) => record.factoryId));
+    return displayFactories.filter((factory) => ids.has(factory.id));
+  }, [factoryHistory, displayFactories]);
+
+  const selectedFactoryInspectionOptions = useMemo(() => {
+    if (!selectedFactoryId) return [];
+    const monthNames = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+    const byMonth = new Map<string, FactoryImportRecord[]>();
+    factoryHistory.filter((record) => record.factoryId === selectedFactoryId).forEach((record) => {
+      const month = record.timestamp.slice(0, 7);
+      if (!byMonth.has(month)) byMonth.set(month, []);
+      byMonth.get(month)!.push(record);
+    });
+    return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([month, records]) => {
+      const [year, monthNumber] = month.split('-').map(Number);
+      const dates = [...new Set(records.map((record) => {
+        const date = new Date(record.timestamp);
+        return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear() + 543}`;
+      }))];
+      return {
+        value: `${month}-01T00:00`,
+        label: `ปี ${year + 543} · ครั้งที่ ${monthNumber} (${monthNames[monthNumber - 1]}) · ตรวจ ${dates.join(', ')}`,
+      };
+    });
+  }, [factoryHistory, selectedFactoryId]);
+
+  const riverKey = (value?: string) => String(value ?? '')
+    .trim()
+    .replace(/^แม่น้ำ/, '')
+    .replace(/^ลำน้ำ/, '')
+    .replace(/ตอน(บน|กลาง|ล่าง).*$/, '')
+    .replace(/\s+/g, '');
+  const visibleRiverCheckpoints = useMemo(() => {
+    if (selectedRiverName === '__all__') return [...checkpoints].sort((a, b) => b.lat - a.lat);
+    const selectedKey = riverKey(selectedRiverName);
+    return checkpoints
+      .filter((checkpoint) => {
+        const checkpointKey = riverKey(checkpoint.riverName);
+        return checkpointKey && (checkpointKey.includes(selectedKey) || selectedKey.includes(checkpointKey));
+      })
+      .sort((a, b) => b.lat - a.lat);
+  }, [checkpoints, selectedRiverName]);
+
+  const handleImportFactoryData = (records: FactoryImportRecord[]) => {
+    setFactoryHistory((previous) => {
+      const merged = new Map(previous.map((record) => [`${record.factoryId}|${record.timestamp}`, record]));
+      records.forEach((record) => merged.set(`${record.factoryId}|${record.timestamp}`, record));
+      return [...merged.values()];
+    });
+    const latest = records.reduce((value, record) => record.timestamp > value ? record.timestamp : value, '');
+    if (latest) {
+      const value = `${latest.slice(0, 7)}-01T00:00`;
+      setFactoryDateTime(value);
+      setCheckpointDateTime(value);
+    }
+    if (records[0]) setSelectedFactoryId(records[0].factoryId);
+  };
+  const handleJumpToLatestFactoryData = () => {
+    const latest = factoryHistory.reduce((value, record) => record.timestamp > value ? record.timestamp : value, '');
+    if (latest) {
+      const value = `${latest.slice(0, 7)}-01T00:00`;
+      setFactoryDateTime(value);
+      setCheckpointDateTime(value);
+    }
+  };
+  const handleFactoryDateTimeChange = (value: string) => {
+    setFactoryDateTime(value);
+    if (value.slice(5, 7) !== '00') setCheckpointDateTime(value);
+  };
+  const handleFactoryYearChange = (year: string) => {
+    const currentRound = factoryDateTime.slice(5, 7);
+    const round = factoryRoundOptions.some((option) => option.value === currentRound) ? currentRound : '00';
+    handleFactoryDateTimeChange(`${year}-${round}-01T00:00`);
+  };
+  const handleFactoryRoundChange = (round: string) => {
+    handleFactoryDateTimeChange(`${factoryDateTime.slice(0, 4)}-${round}-01T00:00`);
+  };
+  const handleClearFactoryData = () => {
+    setFactoryHistory([]);
+    const factoryIdToClear = selectedFactoryId;
+    setSelectedFactoryId(null);
+    setSelectedEntityId((current) => current === factoryIdToClear ? null : current);
+    localStorage.removeItem('diw_factory_history_ereport_v1');
+  };
+  const handleImportStationData = (records: StationImportRecord[]) => {
+    setStationHistory((previous) => {
+      const merged = new Map(previous.map((record) => [`${record.stationName}|${record.timestamp}`, record]));
+      records.forEach((record) => {
+        const registered = resolveRegisteredStation(record);
+        const normalizedRecord = registered
+          ? { ...record, stationName: registered.id, stationCode: registered.code, lat: registered.lat, lon: registered.lon }
+          : record;
+        merged.set(`${normalizedRecord.stationName}|${normalizedRecord.timestamp}`, normalizedRecord);
+      });
+      return [...merged.values()];
+    });
+  };
 
   // Handle entity clicks (Highlights in overlay details)
   const handleSelectEntity = (id: string, type: 'factory' | 'checkpoint') => {
     setSelectedEntityId(id);
+    if (type === 'factory') {
+      setSelectedFactoryId(id);
+    }
   };
 
   return (
@@ -238,7 +443,15 @@ export default function App() {
             </div>
           </div>
 
-          
+          <div className="flex flex-col sm:flex-row gap-3 text-xs w-full sm:w-auto items-center shrink-0">
+            {/* Quick status indicators aligned with Professional Polish template */}
+            <span className="bg-green-500/20 text-green-400 px-3 py-1.5 rounded border border-green-500/30 font-mono uppercase tracking-wider text-[10px] text-center w-full sm:w-auto font-bold">
+              ระบบออนไลน์: ตรวจค่าตามเวลาจริง
+            </span>
+            <span className="text-slate-400 font-mono text-[11px] shrink-0 font-bold">
+              2569 THA CHIN ZONE
+            </span>
+          </div>
         </div>
       </header>
 
@@ -247,19 +460,32 @@ export default function App() {
         
         {/* 4. Full-Width Spatial Map + Controls Below */}
         <div className="flex flex-col gap-6">
+          <FactoryDataUpload
+            onImportFactory={handleImportFactoryData}
+            onImportStation={handleImportStationData}
+            onClearFactoryData={handleClearFactoryData}
+            factoryRecordCount={factoryHistory.length}
+          />
           {/* Spatial Google Map Area: Full Width */}
           <div className="w-full">
             <InteractiveMap 
-              factories={factories}
+              factories={displayFactories}
               checkpoints={checkpoints}
-              checkpointReadings={checkpointReadings}
+              checkpointReadings={displayCheckpointReadings}
               checkpointDateTime={checkpointDateTime}
               onCheckpointDateTimeChange={setCheckpointDateTime}
-              onJumpToLatestData={handleJumpToLatestData}
+              factoryDateTime={factoryDateTime}
+              onFactoryDateTimeChange={handleFactoryDateTimeChange}
+              factoryYearOptions={factoryYearOptions}
+              factoryRoundOptions={factoryRoundOptions}
+              selectedFactoryInspectionOptions={selectedFactoryInspectionOptions}
+              onJumpToLatestFactoryData={handleJumpToLatestFactoryData}
+              hasFactoryHistory={factoryHistory.length > 0}
+              onJumpToLatestData={handleJumpToLatestCheckpointData}
               loadingLatestDate={loadingLatestDate}
               selectedId={selectedEntityId}
               onSelectEntity={handleSelectEntity}
-              onFactoryParamChange={handleFactoryParamChange}
+              onRiverSelectionChange={setSelectedRiverName}
             />
           </div>
 
@@ -291,9 +517,64 @@ export default function App() {
           <div className="p-6 space-y-6">
             {/* Factories Data Table */}
             <div className="space-y-3">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block flex items-center gap-1">
-                🏭 พิกัดปล่อยน้ำเสียกลุ่มอุตสาหกรรมในลุ่มแม่น้ำ (สถานประกอบการขึ้นทะเบียน 5 โหนด)
-              </span>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                  🏭 ข้อมูลตรวจวัดโรงงาน
+                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                    โรงงาน:
+                    <select
+                      value={selectedFactoryId ?? ''}
+                      onChange={(event) => {
+                        const id = event.target.value;
+                        setSelectedFactoryId(id || null);
+                        if (id) handleSelectEntity(id, 'factory');
+                      }}
+                      disabled={factoriesWithHistory.length === 0}
+                      className="max-w-[240px] bg-white border border-slate-300 rounded px-2 py-1 text-xs disabled:text-slate-400"
+                    >
+                      <option value="">เลือกโรงงาน</option>
+                      {factoriesWithHistory.map((factory) => <option key={factory.id} value={factory.id}>{factory.id} · {factory.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                    ปี:
+                    <select
+                      value={factoryDateTime.slice(0, 4)}
+                      onChange={(event) => handleFactoryYearChange(event.target.value)}
+                      disabled={factoryYearOptions.length === 0}
+                      className="bg-white border border-slate-300 rounded px-2 py-1 text-xs disabled:text-slate-400"
+                    >
+                      {factoryYearOptions.length === 0
+                        ? <option value="">ยังไม่มีข้อมูล</option>
+                        : factoryYearOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                    ครั้ง:
+                    <select
+                      value={factoryDateTime.slice(5, 7)}
+                      onChange={(event) => handleFactoryRoundChange(event.target.value)}
+                      disabled={factoryRoundOptions.length === 0}
+                      className="bg-white border border-slate-300 rounded px-2 py-1 text-xs disabled:text-slate-400"
+                    >
+                      {factoryRoundOptions.length === 0
+                        ? <option value="">ยังไม่มีข้อมูล</option>
+                        : factoryRoundOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleJumpToLatestFactoryData}
+                    disabled={factoryHistory.length === 0}
+                    className="flex items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Calendar className="w-3.5 h-3.5" />ข้อมูลล่าสุด
+                  </button>
+                </div>
+              </div>
               <div className="overflow-x-auto overflow-y-auto max-h-[300px] border border-slate-200 rounded-xl">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead className="sticky top-0 z-10">
@@ -302,52 +583,78 @@ export default function App() {
                       <th className="p-3">ชื่อสถานประกอบการ</th>
                       <th className="p-3">ประเภทอุตสาหกรรมดำเนินการ</th>
                       <th className="p-3">พิกัดดาวเทียม (Y, X)</th>
-                      <th className="p-3 text-right">ปล่อยสูงสุดที่อนุญาต (ลบ.ม./วัน)</th>
-                      <th className="p-3 text-right">ปล่อยประเมินจริง (ลบ.ม./วัน)</th>
+                      <th className="p-3 text-right">pH</th>
                       <th className="p-3 text-right">ค่า BOD น้ำทิ้งปัจจุบัน (มก./ลิตร)</th>
                       <th className="p-3 text-right">ค่า COD น้ำทิ้งปัจจุบัน (มก./ลิตร)</th>
+                      <th className="p-3 text-right">TSS</th>
+                      <th className="p-3 text-right">TDS</th>
                       <th className="p-3 text-center">สถานะตามกฎหมาย</th>
+                      <th className="p-3 text-center">กราฟ</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                    {factories.map((factory) => {
+                    {displayFactories.map((factory) => {
                       const isTextile = factory.industryType.includes('สิ่งทอ') || factory.industryType.includes('ฟอกย้อม');
                       const codMax = isTextile ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
-                      const isBODViolating = factory.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX;
-                      const isCODViolating = factory.dischargeCOD > codMax;
-                      const hasViolation = isBODViolating || isCODViolating;
+                      const hasData = factory.hasMeasurementData === true;
+                      const isBODViolating = hasData && factory.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX;
+                      const isCODViolating = hasData && factory.dischargeCOD > codMax;
+                      const hasViolation = hasData && factory.status === 'Violation';
+                      const formatFactoryValue = (value: number | undefined) =>
+                        value === undefined || !Number.isFinite(value) ? '—' : value.toFixed(2);
 
                       return (
-                        <tr 
+                        <tr
                           key={factory.id} 
+                          onClick={() => handleSelectEntity(factory.id, 'factory')}
                           className={`hover:bg-slate-50 transition-colors ${
-                            hasViolation ? 'bg-rose-500/5' : ''
+                            selectedFactoryId === factory.id
+                              ? 'bg-blue-100 ring-2 ring-inset ring-blue-500 cursor-pointer'
+                              : hasViolation
+                                ? 'bg-rose-500/5 cursor-pointer'
+                                : 'cursor-pointer'
                           }`}
                         >
                           <td className="p-3 font-mono font-bold text-slate-900">{factory.id}</td>
                           <td className="p-3">{factory.name}</td>
                           <td className="p-3 text-slate-500">{factory.industryType}</td>
                           <td className="p-3 font-mono text-slate-500">{factory.lat.toFixed(4)}°, {factory.lon.toFixed(4)}°</td>
-                          <td className="p-3 text-right font-mono">{factory.allowedQ.toLocaleString()}</td>
-                          <td className="p-3 text-right font-mono text-slate-900">{factory.actualQ.toLocaleString()}</td>
+                          <td className="p-3 text-right font-mono">{hasData ? formatFactoryValue(factory.pH) : '—'}</td>
                           <td className={`p-3 text-right font-mono font-bold ${
                             isBODViolating ? 'text-rose-600 bg-rose-500/10' : 'text-slate-900'
                           }`}>
-                            {factory.dischargeBOD}
+                            {hasData ? formatFactoryValue(factory.dischargeBOD) : '—'}
                           </td>
                           <td className={`p-3 text-right font-mono font-bold ${
                             isCODViolating ? 'text-rose-600 bg-rose-500/10' : 'text-slate-900'
                           }`}>
-                            {factory.dischargeCOD}
+                            {hasData ? formatFactoryValue(factory.dischargeCOD) : '—'}
                           </td>
+                          <td className="p-3 text-right font-mono">{hasData ? formatFactoryValue(factory.tss) : '—'}</td>
+                          <td className="p-3 text-right font-mono">{hasData ? formatFactoryValue(factory.tds) : '—'}</td>
                           <td className="p-3 text-center">
                             <span className={`inline-block px-2.5 py-0.5 rounded text-[10px] uppercase font-black tracking-wider ${
-                              hasViolation 
+                              !hasData ? 'bg-slate-100 text-slate-600 border border-slate-200' : hasViolation
                                 ? 'bg-rose-100 text-rose-800 border border-rose-200' 
                                 : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                             }`}>
-                              {hasViolation ? 'ฝ่าฝืนเกณฑ์' : 'ผ่านพารามิเตอร์ปกติ'}
+                              {!hasData ? 'ยังไม่มีข้อมูล' : hasViolation ? 'ฝ่าฝืนเกณฑ์' : 'ผ่านพารามิเตอร์ปกติ'}
                             </span>
+                          </td>
+                          <td className="p-3 text-center">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedFactoryId(factory.id);
+                                setFactoryTrendId(factory.id);
+                              }}
+                              disabled={!factoryHistory.some((record) => record.factoryId === factory.id)}
+                              title="ดูกราฟข้อมูลย้อนหลังเฉพาะโรงงานนี้"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <LineChart className="w-4 h-4" />
+                            </button>
                           </td>
                         </tr>
                       );
@@ -366,7 +673,17 @@ export default function App() {
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
                   🌊 สถานีจุดคัดส่งวัดประเมินคุณภาพลำน้ำหลัก (เรียงจากพิกัดระดับต้นลุ่มน้ำลงหาปลายลุ่มน้ำ)
                 </span>
-                <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">
+                  {selectedRiverName === '__all__' ? `ทุกลุ่มน้ำ · ${visibleRiverCheckpoints.length} สถานี` : `${selectedRiverName} · ${visibleRiverCheckpoints.length} สถานี`}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowProfileChart(true)}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors"
+                  >
+                    <GitCompareArrows className="w-3.5 h-3.5" />
+                    กราฟภาพรวมเปรียบเทียบทุกสถานี
+                  </button>
                   <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
                     <Calendar className="w-3.5 h-3.5 text-blue-600" />
                     วันที่/เวลาย้อนหลัง:
@@ -379,15 +696,6 @@ export default function App() {
                       className="bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono"
                     />
                   </label>
-                  <button
-                    onClick={handleJumpToLatestData}
-                    disabled={loadingLatestDate}
-                    title="ปุ่ม “วันนี้” ของปฏิทินจะพาไปวันที่ปัจจุบันจริงซึ่งไม่มีข้อมูล กดปุ่มนี้แทนเพื่อไปยังข้อมูลใหม่สุดที่มีจริง"
-                    className="flex items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-wait"
-                  >
-                    <Calendar className="w-3.5 h-3.5" />
-                    {loadingLatestDate ? 'กำลังค้นหา...' : 'ข้อมูลล่าสุด'}
-                  </button>
                 </div>
               </div>
               {checkpointError && (
@@ -416,14 +724,16 @@ export default function App() {
                         <td colSpan={9} className="p-6 text-center text-slate-400">กำลังโหลดข้อมูล...</td>
                       </tr>
                     ) : (
-                      checkpoints.map((cp) => {
+                      visibleRiverCheckpoints.length === 0 ? (
+                        <tr><td colSpan={9} className="p-6 text-center text-slate-400">ไม่พบสถานีที่ระบุแหล่งน้ำตรงกับแม่น้ำที่เลือก</td></tr>
+                      ) : visibleRiverCheckpoints.map((cp) => {
                         const reading = checkpointReadings[cp.id];
                         const fmt = (v: number | null | undefined, digits = 2) =>
                           v === null || v === undefined ? '—' : v.toFixed(digits);
 
                         return (
                           <tr key={cp.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="p-3 font-mono font-bold text-slate-900">{cp.id}</td>
+                            <td className="p-3 font-mono font-bold text-slate-900">{cp.code ?? cp.id}</td>
                             <td className="p-3">{cp.name}</td>
                             <td className="p-3 font-mono text-slate-500">{cp.lat.toFixed(4)}°, {cp.lon.toFixed(4)}°</td>
                             <td className="p-3 text-right font-mono">{fmt(reading?.values.pH)}</td>
@@ -472,15 +782,37 @@ export default function App() {
 
       {trendChartStationId && (
         <CheckpointTrendChart
-          stations={checkpoints}
+          stations={visibleRiverCheckpoints}
           initialStationId={trendChartStationId}
           onClose={() => setTrendChartStationId(null)}
+        />
+      )}
+
+      {factoryTrendId && (() => {
+        const factoryRecord = factoryHistory.find((record) => record.factoryId === factoryTrendId);
+        if (!factoryRecord) return null;
+        return (
+          <FactoryTrendChart
+            factoryId={factoryTrendId}
+            factoryName={factoryRecord.name}
+            history={factoryHistory}
+            initialYear={factoryDateTime.slice(0, 4)}
+            onClose={() => setFactoryTrendId(null)}
+          />
+        );
+      })()}
+
+      {showProfileChart && (
+        <StationProfileChart
+          stations={visibleRiverCheckpoints}
+          onClose={() => setShowProfileChart(false)}
         />
       )}
     </div>
   );
 }
-function calcStatus(merged: { id: string; name: string; industryType: string; lat: number; lon: number; allowedQ: number; actualQ: number; dischargeBOD: number; dischargeCOD: number; dischargeEC: number; dischargeFecal?: number; dischargeNitrogen?: number; status: "Compliant" | "Violation"; }): any {
-  throw new Error('Function not implemented.');
+function calcStatus(factory: Pick<Factory, 'industryType' | 'dischargeBOD' | 'dischargeCOD'>): Factory['status'] {
+  const isTextile = factory.industryType.includes('สิ่งทอ') || factory.industryType.includes('ฟอกย้อม');
+  const codMax = isTextile ? DIW_STANDARDS.FACTORY_COD_MAX_TEXTILE : DIW_STANDARDS.FACTORY_COD_MAX;
+  return factory.dischargeBOD > DIW_STANDARDS.FACTORY_BOD_MAX || factory.dischargeCOD > codMax ? 'Violation' : 'Compliant';
 }
-

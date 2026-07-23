@@ -1,6 +1,0 @@
-{
-  "name": "Industrial Water Compliance & Defense System",
-  "description": "DIW Decision Support System for industrial wastewater compliance monitoring and diagnostic pollution tracing",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
