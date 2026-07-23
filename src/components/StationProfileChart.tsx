@@ -15,15 +15,39 @@ import {
 } from '../checkpointData';
 
 interface StationProfileChartProps {
-  /** Stations already ordered upstream (top) → downstream (mouth) */
+  /** All stations; the chart filters them by the basin selected inside the dialog. */
   stations: Checkpoint[];
+  riverOptions: string[];
+  initialRiverName?: string;
   onClose: () => void;
 }
 
 const LINE_A_COLOR = '#2563eb'; // blue
 const LINE_B_COLOR = '#f97316'; // orange
 
-export default function StationProfileChart({ stations, onClose }: StationProfileChartProps) {
+const riverKey = (value?: string) => String(value ?? '')
+  .trim()
+  .replace(/^แม่น้ำ/, '')
+  .replace(/^ลำน้ำ/, '')
+  .replace(/ตอน(บน|กลาง|ล่าง).*$/, '')
+  .replace(/\s+/g, '');
+
+export default function StationProfileChart({ stations: allStations, riverOptions, initialRiverName, onClose }: StationProfileChartProps) {
+  const [riverName, setRiverName] = useState(() =>
+    initialRiverName && initialRiverName !== '__all__'
+      ? (riverOptions.find((name) => riverKey(name) === riverKey(initialRiverName)) ?? riverOptions[0] ?? '')
+      : (riverOptions[0] ?? '')
+  );
+  const stations = useMemo(() => {
+    const selectedKey = riverKey(riverName);
+    if (!selectedKey) return [];
+    return allStations
+      .filter((station) => {
+        const stationRiverKey = riverKey(station.riverName);
+        return stationRiverKey && (stationRiverKey.includes(selectedKey) || selectedKey.includes(stationRiverKey));
+      })
+      .sort((a, b) => b.lat - a.lat);
+  }, [allStations, riverName]);
   const [param, setParam] = useState<ParamKey>('pH');
   const [dateTimeA, setDateTimeA] = useState('2023-06-15T09:00');
   const [dateTimeB, setDateTimeB] = useState('2023-12-15T09:00');
@@ -32,6 +56,10 @@ export default function StationProfileChart({ stations, onClose }: StationProfil
   const [valuesB, setValuesB] = useState<Record<string, number | null>>({});
   const [timestampsA, setTimestampsA] = useState<Record<string, string | null>>({});
   const [timestampsB, setTimestampsB] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    if (!riverOptions.includes(riverName)) setRiverName(riverOptions[0] ?? '');
+  }, [riverOptions, riverName]);
 
   const loadProfile = async () => {
     setLoading(true);
@@ -68,7 +96,7 @@ export default function StationProfileChart({ stations, onClose }: StationProfil
   useEffect(() => {
     loadProfile();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [param]);
+  }, [param, stations]);
 
   // ── SVG chart geometry: X = station index (categorical), Y = value ────
   const W = 900, H = 340;
@@ -116,60 +144,79 @@ export default function StationProfileChart({ stations, onClose }: StationProfil
 
   return (
     <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-            <GitCompareArrows className="w-4.5 h-4.5 text-blue-600" />
-            เปรียบเทียบโปรไฟล์คุณภาพน้ำทุกสถานี (ต้นน้ำ → ปลายน้ำ)
-          </h3>
+        <div className="sticky top-0 z-10 flex items-center justify-between p-5 border-b border-slate-200 bg-white">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <GitCompareArrows className="w-4.5 h-4.5 text-blue-600" />
+              เปรียบเทียบคุณภาพน้ำตามลุ่มน้ำ
+            </h3>
+            <p className="mt-1 text-[11px] text-slate-500">เรียงสถานีจากต้นน้ำไปปลายน้ำ · เลือกวันเวลา 2 ช่วงเพื่อเปรียบเทียบ</p>
+          </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-700 transition-colors">
             <X className="w-4.5 h-4.5" />
           </button>
         </div>
 
         {/* Controls */}
-        <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-slate-100 bg-slate-50/50">
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">พารามิเตอร์</label>
+        <div className="p-5 space-y-4 border-b border-slate-100 bg-slate-50/60">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-3">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">1. เลือกลุ่มน้ำ/แม่น้ำ</label>
+            <select
+              value={riverName}
+              onChange={(e) => setRiverName(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white font-semibold"
+            >
+              {riverOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+            <p className="text-[10px] text-sky-700">{stations.length.toLocaleString()} สถานีในลุ่มน้ำที่เลือก</p>
+          </div>
+          <div className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-3">
+            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">2. เลือกพารามิเตอร์</label>
             <select
               value={param}
               onChange={(e) => setParam(e.target.value as ParamKey)}
-              className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white font-medium"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs bg-white font-semibold"
             >
               {(Object.keys(PARAM_LABELS) as ParamKey[]).map(k => (
                 <option key={k} value={k}>{PARAM_LABELS[k]}</option>
               ))}
             </select>
           </div>
-          <div className="space-y-1">
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
             <label className="text-[10px] font-bold uppercase tracking-wide flex items-center gap-1.5" style={{ color: LINE_A_COLOR }}>
               <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: LINE_A_COLOR }} />
-              วันที่/เวลา A
+              3. วัน/เวลาข้อมูลหลัก
             </label>
             <input
               type="datetime-local" value={dateTimeA} min="2015-01-01T00:00" max="2024-12-31T23:59"
               onChange={(e) => setDateTimeA(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-mono"
+              className="w-full border border-blue-200 rounded-lg px-3 py-2 text-[11px] font-mono bg-white"
             />
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5 rounded-xl border border-orange-200 bg-orange-50/60 p-3">
             <label className="text-[10px] font-bold uppercase tracking-wide flex items-center gap-1.5" style={{ color: LINE_B_COLOR }}>
               <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: LINE_B_COLOR }} />
-              วันที่/เวลา B (สำหรับเปรียบเทียบ)
+              4. วัน/เวลาที่นำมาเปรียบเทียบ
             </label>
             <input
               type="datetime-local" value={dateTimeB} min="2015-01-01T00:00" max="2024-12-31T23:59"
               onChange={(e) => setDateTimeB(e.target.value)}
-              className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-[11px] font-mono"
+              className="w-full border border-orange-200 rounded-lg px-3 py-2 text-[11px] font-mono bg-white"
             />
           </div>
-          <div className="sm:col-span-3">
+          </div>
+          <div className="flex items-center justify-end">
             <button
               onClick={loadProfile}
-              className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg transition-colors"
+              disabled={loading || stations.length === 0}
+              className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              แสดง
+              {loading ? 'กำลังโหลดข้อมูล...' : 'แสดงกราฟเปรียบเทียบ'}
             </button>
           </div>
         </div>

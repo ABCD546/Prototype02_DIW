@@ -144,6 +144,14 @@ export default function InteractiveMap({
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
+  useEffect(() => {
+    if (!isMapReady) return;
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'RIGHT_SIDEBAR_STATE',
+      isOpen: isSidebarOpen,
+    }, '*');
+  }, [isMapReady, isSidebarOpen]);
+
 
   // ส่ง markers ไปให้ iframe ทุกครั้งที่ข้อมูลเปลี่ยน
   useEffect(() => {
@@ -217,7 +225,7 @@ export default function InteractiveMap({
       <div
         id="gis-map-shell"
         ref={mapShellRef}
-        className="relative bg-slate-50 rounded-xl overflow-hidden border border-slate-250 shadow-inner flex flex-col md:flex-row"
+        className="relative bg-slate-50 md:bg-[#0b172b] rounded-xl overflow-hidden border border-slate-250 shadow-inner flex flex-col md:flex-row"
         style={{ height: isFullscreen ? '100vh' : '860px', width: isFullscreen ? '100vw' : undefined }}
       >
 
@@ -239,8 +247,8 @@ export default function InteractiveMap({
           />
         </div>
 
-        {/* Sidebar ขวา — จอใหญ่ลอยทับขวาแผนที่ / จอมือถือเลื่อนขึ้นจากด้านล่างแทน ไม่บังแผนที่ทั้งจอ */}
-        <div className={`absolute inset-x-0 bottom-0 md:inset-x-auto md:top-[72px] md:bottom-0 md:right-0 bg-slate-900/95 text-white flex flex-col justify-between text-xs font-sans overflow-y-auto overscroll-contain transition-all duration-300 ease-in-out z-20 rounded-t-2xl md:rounded-none border-t md:border-t-0 border-slate-700 ${
+        {/* Sidebar ขวา — จอใหญ่กินพื้นที่ข้างแผนที่โดยไม่ลอยทับ / จอมือถือเลื่อนขึ้นจากด้านล่าง */}
+        <div className={`absolute inset-x-0 bottom-0 md:inset-x-auto md:top-[96px] md:bottom-0 md:right-0 bg-slate-900/95 text-white flex flex-col justify-between text-xs font-sans overflow-y-auto overscroll-contain transition-all duration-300 ease-in-out z-20 rounded-t-2xl md:rounded-none border-t md:border-t-0 border-slate-700 ${
           isSidebarOpen
             ? 'h-[75%] md:h-auto w-full md:w-64 p-4 pb-8 opacity-100'
             : 'h-0 md:w-0 p-0 opacity-0 pointer-events-none overflow-hidden'
@@ -360,7 +368,7 @@ export default function InteractiveMap({
 
                 <div className="mt-3 border-t border-slate-800 pt-3">
                   <p className="text-[10px] font-extrabold text-slate-300 mb-2">
-                    รอบตรวจปี {Number(factoryDateTime.slice(0, 4)) + 543} ของโรงงานนี้
+                    รอบตรวจปี {factoryDateTime.slice(0, 4)} ของโรงงานนี้
                   </p>
                   {selectedFactoryYearInspectionOptions.length > 0 ? (
                     <div className="flex flex-col gap-1.5">
