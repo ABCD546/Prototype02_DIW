@@ -111,13 +111,14 @@ function updateDateControls(data){
   const yearSelect=document.getElementById('gis-factory-year');
   const roundSelect=document.getElementById('gis-factory-round');
   const yearOptions=data.factoryYearOptions||[];
-  const roundOptions=data.factoryRoundOptions||[];
+  const roundOptions=(data.factoryRoundOptions||[]).filter(o=>o.value!=='00');
   yearSelect.innerHTML=yearOptions.length?yearOptions.map(o=>'<option value="'+o.value+'">'+o.label+'</option>').join(''):'<option value="">ยังไม่มีข้อมูล</option>';
   roundSelect.innerHTML=roundOptions.length?roundOptions.map(o=>'<option value="'+o.value+'">'+o.label+'</option>').join(''):'<option value="">ยังไม่มีข้อมูล</option>';
   yearSelect.disabled=!yearOptions.length;
   roundSelect.disabled=!roundOptions.length;
   yearSelect.value=(data.factoryDateTime||'').slice(0,4);
-  roundSelect.value=(data.factoryDateTime||'').slice(5,7);
+  const selectedRound=(data.factoryDateTime||'').slice(5,7);
+  roundSelect.value=roundOptions.some(o=>o.value===selectedRound)?selectedRound:(roundOptions[0]?.value||'');
   document.getElementById('gis-station-date').value=(data.checkpointDateTime||'').slice(0,16);
 }
 function renderMarkers(data){currentData=data;updateDateControls(data);clearMarkers(factoryMarkers);clearMarkers(checkpointMarkers);const selected=data.selectedId;
@@ -129,7 +130,7 @@ window.addEventListener('message',e=>{if(e.data&&e.data.type==='UPDATE_MARKERS')
 document.getElementById('sidebar-factories').onchange=function(){factoriesVisible=this.checked;if(currentData)renderMarkers(currentData)};
 document.getElementById('station-auto').onchange=function(){automaticStationsVisible=this.checked;if(currentData)renderMarkers(currentData)};
 document.getElementById('station-manual').onchange=function(){manualStationsVisible=this.checked;if(currentData)renderMarkers(currentData)};
-document.getElementById('gis-factory-year').onchange=function(){const round=document.getElementById('gis-factory-round').value||'00';window.parent.postMessage({type:'FACTORY_DATETIME_CHANGED',value:this.value+'-'+round+'-01T00:00'},'*')};
+document.getElementById('gis-factory-year').onchange=function(){const round=document.getElementById('gis-factory-round').value;if(!this.value||!round)return;window.parent.postMessage({type:'FACTORY_DATETIME_CHANGED',value:this.value+'-'+round+'-01T00:00'},'*')};
 document.getElementById('gis-factory-round').onchange=function(){const year=document.getElementById('gis-factory-year').value;window.parent.postMessage({type:'FACTORY_DATETIME_CHANGED',value:year+'-'+this.value+'-01T00:00'},'*')};
 document.getElementById('gis-station-date').onchange=function(){window.parent.postMessage({type:'CHECKPOINT_DATETIME_CHANGED',value:this.value},'*')};
 document.getElementById('gis-latest-factory').onclick=function(){window.parent.postMessage({type:'JUMP_LATEST_FACTORY'},'*')};
