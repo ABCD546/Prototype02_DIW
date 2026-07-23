@@ -112,7 +112,7 @@ export default function FactoryTrendChart({ factoryId, factoryName, history, ini
           <label className="space-y-1">
             <span className="block text-[10px] font-bold text-slate-500">ปี</span>
             <select value={year} onChange={(event) => setYear(event.target.value)} className="border border-slate-300 rounded-lg px-3 py-1.5 text-xs bg-white">
-              {years.map((item) => <option key={item} value={item}>ปี {Number(item) + 543}</option>)}
+              {years.map((item) => <option key={item} value={item}>ปี {item}</option>)}
             </select>
           </label>
           <label className="space-y-1">

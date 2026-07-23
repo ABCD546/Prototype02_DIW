@@ -19,6 +19,8 @@ import {
   Calendar,
   LineChart,
   GitCompareArrows,
+  Factory as FactoryIcon,
+  MapPin,
 } from 'lucide-react';
 
 const BASE_STATIONS: Checkpoint[] = HISTORICAL_STATIONS.map((station) => ({
@@ -64,6 +66,7 @@ export default function App() {
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [selectedFactoryId, setSelectedFactoryId] = useState<string | null>(null);
   const [selectedRiverName, setSelectedRiverName] = useState<string>('__all__');
+  const [majorRiverNames, setMajorRiverNames] = useState<string[]>([]);
   const [factoryDateTime, setFactoryDateTime] = useState<string>('2026-07-22T00:00');
 
   // Checkpoint (CP) historical data: date-time picker + loaded readings per station
@@ -75,6 +78,27 @@ export default function App() {
   const [trendChartStationId, setTrendChartStationId] = useState<string | null>(null);
   const [factoryTrendId, setFactoryTrendId] = useState<string | null>(null);
   const [showProfileChart, setShowProfileChart] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch('/data/thailand-major-river-index.geojson')
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data: { features?: { properties?: { majorRiver?: string } }[] }) => {
+        const names = [...new Set(
+          (data.features ?? [])
+            .map((feature) => feature.properties?.majorRiver?.trim())
+            .filter((name): name is string => Boolean(name))
+        )].sort((a, b) => a.localeCompare(b, 'th'));
+        setMajorRiverNames(names);
+      })
+      .catch(() => setMajorRiverNames([]));
+  }, []);
+
+  useEffect(() => {
+    if (selectedRiverName === '__all__') setShowProfileChart(false);
+  }, [selectedRiverName]);
 
   // Load historical checkpoint readings (pH/DO/EC/Temp) for every station
   // whenever the selected date-time changes.
@@ -115,6 +139,38 @@ export default function App() {
     setCheckpointError(null);
     try {
       const index = await loadCheckpointIndex();
+      const selectedCheckpoint = checkpoints.find((checkpoint) => checkpoint.id === selectedEntityId);
+      if (selectedCheckpoint) {
+        const code = STATION_FILE_CODE[selectedCheckpoint.id];
+        if (code) {
+          const availableYears = index.stations[code]?.years ?? [];
+          const latestYear = Math.max(...availableYears);
+          if (!Number.isFinite(latestYear)) throw new Error('สถานีที่เลือกไม่มีปีข้อมูลย้อนหลัง');
+          const readings = await loadCheckpointYear(selectedCheckpoint.id, latestYear);
+          const latestTimestamp = readings.reduce(
+            (latest, reading) => reading.timestamp > latest ? reading.timestamp : latest,
+            ''
+          );
+          if (!latestTimestamp) throw new Error('สถานีที่เลือกไม่มีเวลาบันทึกล่าสุด');
+          setCheckpointDateTime(latestTimestamp.slice(0, 16));
+          return;
+        }
+
+        const uploadedRecords = stationHistory.filter((record) => {
+          const registered = resolveRegisteredStation(record);
+          return (registered?.id ?? record.stationName) === selectedCheckpoint.id;
+        });
+        const latestUploadedTimestamp = uploadedRecords.reduce(
+          (latest, record) => record.timestamp > latest ? record.timestamp : latest,
+          ''
+        );
+        if (latestUploadedTimestamp) {
+          setCheckpointDateTime(latestUploadedTimestamp.slice(0, 16));
+          return;
+        }
+        throw new Error('สถานีที่เลือกมีเฉพาะพิกัด ยังไม่มีข้อมูลผลตรวจวัด');
+      }
+
       const stationYears = HISTORICAL_STATIONS.map((cp) => {
         const code = STATION_FILE_CODE[cp.id];
         return new Set(index.stations[code]?.years ?? []);
@@ -140,7 +196,7 @@ export default function App() {
       setCheckpointDateTime(latestSharedTimestamp.slice(0, 16));
     } catch (error) {
       console.error('Failed to find latest shared checkpoint data:', error);
-      setCheckpointError('ไม่สามารถค้นหาข้อมูลล่าสุดที่ทุกสถานีมีร่วมกันได้');
+      setCheckpointError(error instanceof Error ? error.message : 'ไม่สามารถค้นหาข้อมูลล่าสุดได้');
     } finally {
       setLoadingLatestDate(false);
     }
@@ -269,7 +325,7 @@ export default function App() {
     const historyYears = [...new Set(factoryHistory.map((record) => Number(record.timestamp.slice(0, 4))))].filter(Number.isFinite).sort((a, b) => a - b);
     return historyYears.map((year) => ({
       value: String(year),
-      label: `ปี ${year + 543}`,
+      label: `ปี ${year}`,
     }));
   }, [factoryHistory]);
 
@@ -282,15 +338,12 @@ export default function App() {
         .map((record) => record.timestamp.slice(5, 7))
     );
     if (availableMonths.size === 0) return [];
-    return [
-      { value: '00', label: 'ภาพรวมทั้งปี' },
-      ...monthNames
-        .map((monthName, index) => {
-          const month = String(index + 1).padStart(2, '0');
-          return { value: month, label: `ครั้งที่ ${index + 1} (${monthName})` };
-        })
-        .filter((option) => availableMonths.has(option.value)),
-    ];
+    return monthNames
+      .map((monthName, index) => {
+        const month = String(index + 1).padStart(2, '0');
+        return { value: month, label: `ครั้งที่ ${index + 1} (${monthName})` };
+      })
+      .filter((option) => availableMonths.has(option.value));
   }, [factoryHistory, factoryDateTime]);
 
   useEffect(() => {
@@ -298,11 +351,15 @@ export default function App() {
     const selectedRound = factoryDateTime.slice(5, 7);
     if (factoryYearOptions.length > 0 && !factoryYearOptions.some((option) => option.value === selectedYear)) {
       const latestYear = factoryYearOptions[factoryYearOptions.length - 1].value;
-      setFactoryDateTime(`${latestYear}-00-01T00:00`);
+      const firstMonth = factoryHistory
+        .filter((record) => record.timestamp.slice(0, 4) === latestYear)
+        .map((record) => record.timestamp.slice(5, 7))
+        .sort()[0] ?? '01';
+      setFactoryDateTime(`${latestYear}-${firstMonth}-01T00:00`);
     } else if (factoryRoundOptions.length > 0 && !factoryRoundOptions.some((option) => option.value === selectedRound)) {
-      setFactoryDateTime(`${selectedYear}-00-01T00:00`);
+      setFactoryDateTime(`${selectedYear}-${factoryRoundOptions[0].value}-01T00:00`);
     }
-  }, [factoryYearOptions, factoryRoundOptions, factoryDateTime]);
+  }, [factoryYearOptions, factoryRoundOptions, factoryDateTime, factoryHistory]);
 
   const factoriesWithHistory = useMemo(() => {
     const ids = new Set(factoryHistory.map((record) => record.factoryId));
@@ -322,11 +379,11 @@ export default function App() {
       const [year, monthNumber] = month.split('-').map(Number);
       const dates = [...new Set(records.map((record) => {
         const date = new Date(record.timestamp);
-        return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear() + 543}`;
+        return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
       }))];
       return {
         value: `${month}-01T00:00`,
-        label: `ปี ${year + 543} · ครั้งที่ ${monthNumber} (${monthNames[monthNumber - 1]}) · ตรวจ ${dates.join(', ')}`,
+        label: `ปี ${year} · ครั้งที่ ${monthNumber} (${monthNames[monthNumber - 1]}) · ตรวจ ${dates.join(', ')}`,
       };
     });
   }, [factoryHistory, selectedFactoryId]);
@@ -347,6 +404,14 @@ export default function App() {
       })
       .sort((a, b) => b.lat - a.lat);
   }, [checkpoints, selectedRiverName]);
+  const stationRiverOptions = useMemo(
+    () => majorRiverNames.length ? majorRiverNames : [...new Set(
+      checkpoints
+        .map((checkpoint) => checkpoint.riverName?.trim())
+        .filter((name): name is string => Boolean(name))
+    )].sort((a, b) => a.localeCompare(b, 'th')),
+    [checkpoints, majorRiverNames]
+  );
 
   const handleImportFactoryData = (records: FactoryImportRecord[]) => {
     setFactoryHistory((previous) => {
@@ -376,7 +441,12 @@ export default function App() {
   };
   const handleFactoryYearChange = (year: string) => {
     const currentRound = factoryDateTime.slice(5, 7);
-    const round = factoryRoundOptions.some((option) => option.value === currentRound) ? currentRound : '00';
+    const availableRounds = [...new Set(
+      factoryHistory
+        .filter((record) => record.timestamp.slice(0, 4) === year)
+        .map((record) => record.timestamp.slice(5, 7))
+    )].sort();
+    const round = availableRounds.includes(currentRound) ? currentRound : (availableRounds[0] ?? '01');
     handleFactoryDateTimeChange(`${year}-${round}-01T00:00`);
   };
   const handleFactoryRoundChange = (round: string) => {
@@ -518,8 +588,9 @@ export default function App() {
             {/* Factories Data Table */}
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                  🏭 ข้อมูลตรวจวัดโรงงาน
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap shrink-0 flex items-center gap-1.5">
+                  <FactoryIcon className="w-4 h-4 text-sky-600" />
+                  โรงงาน
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
@@ -670,23 +741,26 @@ export default function App() {
             {/* Checkpoints Data Table */}
             <div className="space-y-3 pt-3 border-t border-slate-100">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                  🌊 สถานีจุดคัดส่งวัดประเมินคุณภาพลำน้ำหลัก (เรียงจากพิกัดระดับต้นลุ่มน้ำลงหาปลายลุ่มน้ำ)
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap shrink-0 flex items-center gap-1.5">
+                  <MapPin className="w-4 h-4 text-sky-600" />
+                  สถานีตรวจวัด
                 </span>
-                <span className="text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">
-                  {selectedRiverName === '__all__' ? `ทุกลุ่มน้ำ · ${visibleRiverCheckpoints.length} สถานี` : `${selectedRiverName} · ${visibleRiverCheckpoints.length} สถานี`}
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowProfileChart(true)}
-                    className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors"
-                  >
-                    <GitCompareArrows className="w-3.5 h-3.5" />
-                    กราฟภาพรวมเปรียบเทียบทุกสถานี
-                  </button>
+                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
+                    ลุ่มน้ำ:
+                    <select
+                      value={selectedRiverName}
+                      onChange={(event) => setSelectedRiverName(event.target.value)}
+                      disabled={stationRiverOptions.length === 0}
+                      className="max-w-[240px] bg-white border border-slate-300 rounded px-2 py-1 text-xs disabled:text-slate-400"
+                    >
+                      <option value="__all__">ทุกลุ่มน้ำ</option>
+                      {stationRiverOptions.map((riverName) => <option key={riverName} value={riverName}>{riverName}</option>)}
+                    </select>
+                  </label>
                   <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
                     <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                    วันที่/เวลาย้อนหลัง:
+                    วันที่/เวลา:
                     <input
                       type="datetime-local"
                       value={checkpointDateTime}
@@ -696,6 +770,26 @@ export default function App() {
                       className="bg-white border border-slate-300 rounded px-2 py-1 text-xs font-mono"
                     />
                   </label>
+                  <button
+                    type="button"
+                    onClick={handleJumpToLatestCheckpointData}
+                    disabled={loadingLatestDate}
+                    className="flex items-center gap-1.5 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Calendar className="w-3.5 h-3.5" />{loadingLatestDate ? 'กำลังโหลด...' : 'ข้อมูลล่าสุด'}
+                  </button>
+                  <div className="flex w-full items-center justify-end gap-2 whitespace-nowrap">
+                    <span className="text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">
+                      {selectedRiverName === '__all__' ? `ทุกลุ่มน้ำ · ${visibleRiverCheckpoints.length} สถานี` : `${selectedRiverName} · ${visibleRiverCheckpoints.length} สถานี`}
+                    </span>
+                    <button
+                      onClick={() => setShowProfileChart(true)}
+                      className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-3 py-1.5 transition-colors"
+                    >
+                      <GitCompareArrows className="w-3.5 h-3.5" />
+                      กราฟเปรียบเทียบสถานีแยกตามลุ่มน้ำ
+                    </button>
+                  </div>
                 </div>
               </div>
               {checkpointError && (
@@ -746,8 +840,9 @@ export default function App() {
                             <td className="p-3 text-center">
                               <button
                                 onClick={() => setTrendChartStationId(cp.id)}
-                                title="ดูกราฟแนวโน้มย้อนหลัง"
-                                className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                                disabled={!STATION_FILE_CODE[cp.id]}
+                                title={STATION_FILE_CODE[cp.id] ? 'ดูกราฟแนวโน้มย้อนหลัง' : 'สถานีนี้ยังไม่มีข้อมูลย้อนหลังสำหรับสร้างกราฟ'}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-25 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-slate-400"
                               >
                                 <LineChart className="w-4 h-4" />
                               </button>
@@ -804,7 +899,9 @@ export default function App() {
 
       {showProfileChart && (
         <StationProfileChart
-          stations={visibleRiverCheckpoints}
+          stations={checkpoints}
+          riverOptions={stationRiverOptions}
+          initialRiverName={selectedRiverName}
           onClose={() => setShowProfileChart(false)}
         />
       )}
