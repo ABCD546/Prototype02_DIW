@@ -22,6 +22,7 @@ export interface Factory {
   status: 'Compliant' | 'Violation';
   /** มีผลตรวจจริงที่อัปโหลดแล้ว; false = แสดงเฉพาะข้อมูลทะเบียน/พิกัด */
   hasMeasurementData?: boolean;
+  noDataForSelectedPeriod?: boolean;
   inspectionCount?: number;
   isAnnualSummary?: boolean;
   testedParameters?: string[];
@@ -51,6 +52,7 @@ export interface FactoryImportRecord {
 export interface StationImportRecord {
   stationName: string;
   stationCode?: string;
+  stationType?: 'automatic' | 'manual';
   lat: number | null;
   lon: number | null;
   timestamp: string;

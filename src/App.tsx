@@ -212,7 +212,7 @@ export default function App() {
       if (registered) {
         map.set(registered.id, { ...registered, hasMeasurementData: true });
       } else if (record.lat !== null && record.lon !== null) {
-        map.set(record.stationName, { id: record.stationName, name: record.stationName, lat: record.lat, lon: record.lon, code: record.stationCode, stationType: 'uploaded', hasMeasurementData: true });
+        map.set(record.stationName, { id: record.stationName, name: record.stationName, lat: record.lat, lon: record.lon, code: record.stationCode, stationType: record.stationType ?? 'uploaded', hasMeasurementData: true });
       }
     });
     return [...map.values()];
@@ -309,15 +309,24 @@ export default function App() {
         result.push(factory);
       }
     });
-    if (selectedFactoryId && !result.some((factory) => factory.id === selectedFactoryId)) {
-      const history = factoryHistory.filter((record) => record.factoryId === selectedFactoryId);
-      if (history.length) {
-        const latest = closestRecord(history);
-        if (latest.lat != null && latest.lon != null) {
-          result.push({ ...toFactory(latest), hasMeasurementData: false, status: 'Compliant' });
-        }
-      }
-    }
+    const allHistoryByFactory = new Map<string, FactoryImportRecord[]>();
+    factoryHistory.forEach((record) => {
+      if (!allHistoryByFactory.has(record.factoryId)) allHistoryByFactory.set(record.factoryId, []);
+      allHistoryByFactory.get(record.factoryId)!.push(record);
+    });
+    const visibleIds = new Set(result.map((factory) => factory.id));
+    allHistoryByFactory.forEach((history, factoryId) => {
+      if (visibleIds.has(factoryId)) return;
+      const latest = closestRecord(history);
+      if (latest.lat == null || latest.lon == null) return;
+      result.push({
+        ...toFactory(latest),
+        hasMeasurementData: false,
+        noDataForSelectedPeriod: true,
+        status: 'Compliant',
+        inspectionCount: history.length,
+      });
+    });
     return result;
   }, [factories, factoryHistory, factoryDateTime, selectedFactoryId]);
 
@@ -590,11 +599,11 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap shrink-0 flex items-center gap-1.5">
                   <FactoryIcon className="w-4 h-4 text-sky-600" />
-                  โรงงาน
+                  จุดตรวจโรงงาน
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-                    โรงงาน:
+                    จุดตรวจโรงงาน:
                     <select
                       value={selectedFactoryId ?? ''}
                       onChange={(event) => {
@@ -605,7 +614,7 @@ export default function App() {
                       disabled={factoriesWithHistory.length === 0}
                       className="max-w-[240px] bg-white border border-slate-300 rounded px-2 py-1 text-xs disabled:text-slate-400"
                     >
-                      <option value="">เลือกโรงงาน</option>
+                      <option value="">เลือกจุดตรวจโรงงาน</option>
                       {factoriesWithHistory.map((factory) => <option key={factory.id} value={factory.id}>{factory.id} · {factory.name}</option>)}
                     </select>
                   </label>
@@ -650,7 +659,7 @@ export default function App() {
                 <table className="w-full text-left border-collapse text-xs">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
-                      <th className="p-3">รหัสโรงงาน</th>
+                      <th className="p-3">รหัสจุดตรวจโรงงาน</th>
                       <th className="p-3">ชื่อสถานประกอบการ</th>
                       <th className="p-3">ประเภทอุตสาหกรรมดำเนินการ</th>
                       <th className="p-3">พิกัดดาวเทียม (Y, X)</th>
@@ -743,7 +752,7 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <span className="text-xs font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap shrink-0 flex items-center gap-1.5">
                   <MapPin className="w-4 h-4 text-sky-600" />
-                  สถานีตรวจวัด
+                  จุดตรวจวัด
                 </span>
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
                   <label className="flex items-center gap-2 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
