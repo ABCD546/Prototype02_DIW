@@ -186,8 +186,8 @@ export default function InteractiveMap({
             ระบบแผนที่วิเคราะห์พิกัดดาวเทียมแบบโต้ตอบ (GIS)
           </h3>
           <p className="text-[10px] xl:text-[11px] text-slate-500 mt-0.5 font-medium">
-            <span className="whitespace-nowrap">พื้นที่ลุ่มแม่น้ำท่าจีน ประเทศไทย — จำลองแบบจำลองระบุกรรมสิทธิ์มลพิษและการตรวจอัตลักษณ์ด้วย</span>
-            <br />Open-Source Map Tiles
+            <span>พื้นที่ลุ่มน้ำและแม่น้ำสายหลักทั่วประเทศไทย — ระบบ GIS สำหรับจุดตรวจโรงงาน สถานีอัตโนมัติ และจุดตรวจวัด</span>
+            <br />ข้อมูลแผนที่ Open-Source Map Tiles
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 md:flex-1 md:justify-end">
@@ -203,18 +203,18 @@ export default function InteractiveMap({
               <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block border border-white shadow-xs" /> สถานีอัตโนมัติ (ยังไม่มีข้อมูล)
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block border border-white shadow-xs" /> สถานีเก็บตัวอย่าง (ยังไม่มีข้อมูล)
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block border border-white shadow-xs" /> จุดตรวจวัด (ยังไม่มีข้อมูล)
             </span>
             </div>
             <div className="flex flex-wrap md:flex-nowrap gap-2">
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block border border-white shadow-xs" /> โรงงาน (ผ่านเกณฑ์ปกติ)
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-500 inline-block border border-white shadow-xs" /> จุดตรวจโรงงาน (ผ่านเกณฑ์ปกติ)
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> โรงงาน (ปล่อยมลพิษล้นเกณฑ์)
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block border border-white shadow-xs" /> จุดตรวจโรงงาน (ปล่อยมลพิษล้นเกณฑ์)
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-slate-300 inline-block border border-slate-400 shadow-xs" /> โรงงาน (ยังไม่มีข้อมูลผลตรวจ)
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-300 inline-block border border-slate-400 shadow-xs" /> จุดตรวจโรงงาน (ยังไม่มีข้อมูลผลตรวจ)
             </span>
             </div>
           </div>
@@ -310,7 +310,9 @@ export default function InteractiveMap({
                     <span className="text-slate-300">{formatFactoryValue(selectedFactory.tds)} มก./ลิตร</span>
                   </div>
                   </> : <div className="rounded-lg border border-slate-700 bg-slate-900/70 p-3 font-sans text-slate-300 space-y-2">
-                    {selectedFactory.testedParameters?.length ? <>
+                    {selectedFactory.noDataForSelectedPeriod ? (
+                      <p className="text-center text-[11px]">ยังไม่มีข้อมูลผลตรวจวัดในปีและรอบที่เลือก<br />จุดตรวจโรงงานนี้ยังคงแสดงจากประวัติที่เคยอัปโหลด</p>
+                    ) : selectedFactory.testedParameters?.length ? <>
                       <p className="text-[11px] font-extrabold text-amber-300">มีรายการส่งตรวจ แต่ยังไม่มีค่าผลวิเคราะห์</p>
                       {selectedFactory.inspectionTimestamp && <p className="text-[10px]"><span className="text-slate-500">วันที่เก็บตัวอย่าง:</span> {new Date(selectedFactory.inspectionTimestamp).toLocaleString('th-TH')}</p>}
                       {selectedFactory.collectionPoint && <p className="text-[10px]"><span className="text-slate-500">จุดเก็บ:</span> {selectedFactory.collectionPoint}</p>}
@@ -404,7 +406,7 @@ export default function InteractiveMap({
                     <p className="text-[11px] text-slate-300 font-bold leading-tight mt-0.5">{selectedCheckpoint.name}</p>
                     {selectedCheckpoint.stationType && (
                       <p className="text-[10px] text-sky-300 mt-1">
-                        {selectedCheckpoint.stationType === 'automatic' ? 'สถานีตรวจวัดอัตโนมัติ' : selectedCheckpoint.stationType === 'manual' ? 'สถานีตรวจแบบเก็บตัวอย่าง' : 'สถานีข้อมูลย้อนหลัง'}
+                        {selectedCheckpoint.stationType === 'automatic' ? 'สถานีอัตโนมัติ' : selectedCheckpoint.stationType === 'manual' ? 'จุดตรวจวัด' : 'จุดตรวจวัด'}
                       </p>
                     )}
                   </div>

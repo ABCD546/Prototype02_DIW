@@ -11,8 +11,8 @@ interface Props {
 }
 
 const FACTORY_COLUMNS = ['factory_id', 'name', 'industry_type', 'latitude', 'longitude', 'timestamp', 'pH', 'BOD', 'COD', 'TSS', 'TDS'];
-const STATION_COLUMNS = ['รหัสสถานี', 'ชื่อสถานี', 'วันที่/เวลา', 'pH', 'DO', 'EC', 'อุณหภูมิ'];
 type UploadKind = 'factory' | 'station';
+type StationUploadKind = 'automatic' | 'manual';
 
 const normalized = (value: unknown) => String(value ?? '').trim();
 const key = (value: unknown) => normalized(value).toLowerCase();
@@ -28,8 +28,9 @@ const STATION_HEADER_ALIASES: Record<string, string> = {
   time: 'record time', 'เวลาบันทึก': 'record time', 'เวลา': 'record time',
   ph: 'ph', 'p.h.': 'ph', 'ความเป็นกรดด่าง': 'ph',
   do: 'do', 'do ล่าสุด': 'do', 'do (mg/l)': 'do', 'dissolved oxygen': 'do', dissolved_oxygen: 'do', 'ออกซิเจนละลายน้ำ': 'do',
-  ec: 'ec', conductivity: 'ec', 'electrical conductivity': 'ec', 'ค่าการนำไฟฟ้า': 'ec',
-  temp: 'temp', temperature: 'temp', 'water temperature': 'temp', 'อุณหภูมิ': 'temp',
+  'do(mg/l)': 'do',
+  ec: 'ec', conductivity: 'ec', 'electrical conductivity': 'ec', 'ค่าการนำไฟฟ้า': 'ec', 'cond(μs)': 'ec', 'cond(µs)': 'ec',
+  temp: 'temp', temperature: 'temp', 'water temperature': 'temp', 'อุณหภูมิ': 'temp', 'temp(w)': 'temp',
 };
 const canonicalHeader = (value: unknown, kind: UploadKind) => {
   const header = key(value);
@@ -150,6 +151,9 @@ export function parseRows(rows: unknown[][], kind: UploadKind): FactoryImportRec
     if (eReport) return eReport;
   }
   const headers = rows[0].map((header) => canonicalHeader(header, kind));
+  const stationType: StationUploadKind = rows[0].some((header) => /ครั้งที่\s*\(round\)|depth\(m\)|temp\(w\)/i.test(normalized(header)))
+    ? 'manual'
+    : 'automatic';
   const wanted = (kind === 'factory' ? FACTORY_COLUMNS : ['timestamp']).map(key);
   const missing = wanted.filter((column) => !headers.includes(column));
   if (missing.length) throw new Error(`ขาดคอลัมน์: ${missing.join(', ')}`);
@@ -198,6 +202,7 @@ export function parseRows(rows: unknown[][], kind: UploadKind): FactoryImportRec
     return {
       stationName: stationName || stationCode,
       stationCode: stationCode || undefined,
+      stationType,
       lat: optionalNumberAt(row, 'latitude', rowNumber), lon: optionalNumberAt(row, 'longitude', rowNumber),
       timestamp: dateAt(row, rowNumber), pH: optionalNumberAt(row, 'pH', rowNumber),
       do: optionalNumberAt(row, 'DO', rowNumber), ec: optionalNumberAt(row, 'EC', rowNumber), temp: optionalNumberAt(row, 'Temp', rowNumber),
@@ -209,6 +214,7 @@ export default function FactoryDataUpload({ onImportFactory, onImportStation, on
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<UploadKind>('factory');
+  const [stationUploadKind, setStationUploadKind] = useState<StationUploadKind>('automatic');
   const [records, setRecords] = useState<(FactoryImportRecord | StationImportRecord)[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -217,31 +223,80 @@ export default function FactoryDataUpload({ onImportFactory, onImportStation, on
     setError(null);
     try {
       let rows: unknown[][];
+      let parsed: FactoryImportRecord[] | StationImportRecord[];
       if (file.name.toLowerCase().endsWith('.xlsx')) {
         const workbook = XLSX.read(await file.arrayBuffer());
-        rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1, raw: false }) as unknown[][];
-      } else rows = rowsFromCsv(await file.text());
-      const parsed = parseRows(rows, kind);
+        if (kind === 'station') {
+          const parsedSheets: StationImportRecord[] = [];
+          const errors: string[] = [];
+          workbook.SheetNames.forEach((sheetName) => {
+            const sheetRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: false }) as unknown[][];
+            try {
+              parsedSheets.push(...parseRows(sheetRows, 'station') as StationImportRecord[]);
+            } catch (error) {
+              errors.push(error instanceof Error ? `${sheetName}: ${error.message}` : `${sheetName}: อ่านข้อมูลไม่สำเร็จ`);
+            }
+          });
+          if (!parsedSheets.length) throw new Error(errors[0] || 'ไม่พบชีตข้อมูลสถานีที่รองรับ');
+          parsed = parsedSheets;
+        } else {
+          rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1, raw: false }) as unknown[][];
+          parsed = parseRows(rows, kind);
+        }
+      } else {
+        rows = rowsFromCsv(await file.text());
+        parsed = parseRows(rows, kind);
+      }
       assertNoFutureTimestamps(parsed);
       setRecords(kind === 'factory' ? await enrichFactoryLocations(parsed as FactoryImportRecord[]) : parsed);
     } catch (err) { setRecords([]); setError(err instanceof Error ? err.message : 'อ่านไฟล์ไม่สำเร็จ'); }
   };
 
   const downloadTemplate = () => {
-    const factoryExample = ['FAC001', 'โรงงานตัวอย่าง', 'อุตสาหกรรมอาหาร', 13.7563, 100.5018, '2026-07-22T09:00:00', 7.2, 12, 80, 24, 620];
-    const columns = kind === 'factory' ? FACTORY_COLUMNS : STATION_COLUMNS;
-    const stationExamples = [
-      ['114', 'สถานีหันคา', '22/07/2569 09:00', 7.1, 5.8, 350, 29.4],
-      ['114', 'สถานีหันคา', '15/01/2569 09:00', 7.3, 6.1, 342, 27.8],
-      ['CPR01', 'CPR01', '10/03/2568 10:30', 7.0, 5.2, 410, 30.1],
-    ];
-    const rows = kind === 'factory' ? [columns, factoryExample] : [columns, ...stationExamples];
-    const sheet = XLSX.utils.aoa_to_sheet(rows);
-    sheet['!cols'] = columns.map((column) => ({ wch: Math.max(13, column.length + 4) }));
-    sheet['!autofilter'] = { ref: `A1:${XLSX.utils.encode_col(columns.length - 1)}${rows.length}` };
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, sheet, kind === 'factory' ? 'ข้อมูลโรงงาน' : 'ข้อมูลสถานีตรวจวัด');
-    XLSX.writeFile(workbook, kind === 'factory' ? 'แม่แบบข้อมูลโรงงาน.xlsx' : 'แม่แบบข้อมูลสถานีตรวจวัด.xlsx');
+    if (kind === 'factory') {
+      const columns = ['#', 'รหัสปฏิบัติการ', 'ประเภทตัวอย่าง', 'หน่วยงานผู้ยื่นคำร้อง', 'จุดเก็บ', 'ชื่อโรงงาน/แหล่งเก็บนอกโรงงาน', 'สถานที่ตั้ง (จังหวัด)', 'เลขทะเบียนโรงงาน', 'วันที่เก็บตัวอย่าง', 'พารามิเตอร์', 'ค่าวิเคราะห์', 'หน่วย'];
+      const base = ['12-25690720-00001', 'น้ำเสีย', 'สำนักงานอุตสาหกรรมจังหวัดสมุทรสาคร', 'น้ำเสียบ่อสุดท้าย', 'บริษัท ตัวอย่างอุตสาหกรรม จำกัด', 'สมุทรสาคร', '00740000123456', '2569/07/20 09:00:00'];
+      const parameters = [
+        ['ค่าความเป็นกรดและด่าง', 7.2, ''],
+        ['ค่าบีโอดี', 12, 'มิลลิกรัมต่อลิตร'],
+        ['ค่าซีโอดี', 80, 'มิลลิกรัมต่อลิตร'],
+        ['ค่าของแข็งแขวนลอยทั้งหมด', 24, 'มิลลิกรัมต่อลิตร'],
+        ['ค่าของแข็งละลายน้ำทั้งหมด', 620, 'มิลลิกรัมต่อลิตร'],
+      ];
+      const rows = [
+        ['E-Report | สรุปรายงานแยกตามรายการตรวจวัด'],
+        columns,
+        ...parameters.map((parameter, index) => [index + 1, ...base, ...parameter]),
+      ];
+      const sheet = XLSX.utils.aoa_to_sheet(rows);
+      sheet['!cols'] = columns.map((column) => ({ wch: Math.max(14, column.length + 3) }));
+      sheet['!autofilter'] = { ref: `A2:L${rows.length}` };
+      XLSX.utils.book_append_sheet(workbook, sheet, 'E-Report โรงงาน');
+    } else if (stationUploadKind === 'automatic') {
+      const autoColumns = ['ลำดับ', 'ชื่อสถานี', 'รหัสสถานี', 'จังหวัด', 'ภาค', 'แหล่งน้ำ', 'วันที่บันทึก', 'เวลาบันทึก', 'Salinity', 'DO ล่าสุด', 'DO เฉลี่ย', 'สถานะ', 'BOD', 'COD', 'EC', 'NH4-N', 'pH', 'อุณหภูมิ'];
+      const autoRows = [
+        autoColumns,
+        [1, 'สถานี สองพี่น้อง', '115', 'สุพรรณบุรี', 'ภาคกลาง', 'แม่น้ำท่าจีน', '22/07/2569', '09:00:00', '-', 7.37, 7.46, 'ดี', '-', '-', 350, '-', 7.2, 30.4],
+      ];
+      const autoSheet = XLSX.utils.aoa_to_sheet(autoRows);
+      autoSheet['!cols'] = autoColumns.map((column) => ({ wch: Math.max(13, column.length + 3) }));
+      XLSX.utils.book_append_sheet(workbook, autoSheet, 'สถานีอัตโนมัติ');
+    } else {
+      const manualColumns = ['No.', 'แม่น้ำ (River Name)', 'ครั้งที่ (Round)', 'Month', 'Station', 'Year', 'Date', 'Time', 'Depth(m)', 'Temp(a)', 'Temp(w)', 'pH', 'tur(NTU)', 'Cond(μS)', 'Sal(ppt)', 'DO(mg/l)', 'BOD(mg/l)', 'Total Coli(MPN/100ml)'];
+      const manualRows = [
+        manualColumns,
+        [1, 'แม่น้ำท่าจีน', 1, 2, 'TC01', 2569, '11/02/2569', '09:00:00', 1.2, 31, 28.5, 7.37, 14.8, 176.2, 0, 6.97, 0.98, 4600],
+      ];
+      const manualSheet = XLSX.utils.aoa_to_sheet(manualRows);
+      manualSheet['!cols'] = manualColumns.map((column) => ({ wch: Math.max(13, column.length + 3) }));
+      XLSX.utils.book_append_sheet(workbook, manualSheet, 'จุดตรวจวัด');
+    }
+    XLSX.writeFile(workbook, kind === 'factory'
+      ? 'แม่แบบข้อมูลโรงงาน.xlsx'
+      : stationUploadKind === 'automatic'
+        ? 'แม่แบบสถานีอัตโนมัติ.xlsx'
+        : 'แม่แบบจุดตรวจวัด.xlsx');
   };
 
   const confirm = () => {
@@ -257,9 +312,13 @@ export default function FactoryDataUpload({ onImportFactory, onImportStation, on
     </button>
     {open && <div className="border-t border-slate-200 p-4 space-y-4">
       <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-bold">
-        <button type="button" onClick={() => { setKind('factory'); setRecords([]); setError(null); }} className={`px-3 py-2 rounded-md ${kind === 'factory' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>ฝั่งโรงงาน</button>
-        <button type="button" onClick={() => { setKind('station'); setRecords([]); setError(null); }} className={`px-3 py-2 rounded-md ${kind === 'station' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>ฝั่งสถานีตรวจวัด</button>
+        <button type="button" onClick={() => { setKind('factory'); setRecords([]); setError(null); }} className={`px-3 py-2 rounded-md ${kind === 'factory' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>จุดตรวจโรงงาน</button>
+        <button type="button" onClick={() => { setKind('station'); setRecords([]); setError(null); }} className={`px-3 py-2 rounded-md ${kind === 'station' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>สถานีและจุดตรวจวัด</button>
       </div>
+      {kind === 'station' && <div className="inline-flex rounded-lg bg-sky-50 border border-sky-100 p-1 text-xs font-bold">
+        <button type="button" onClick={() => { setStationUploadKind('automatic'); setRecords([]); setError(null); }} className={`px-3 py-2 rounded-md ${stationUploadKind === 'automatic' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>สถานีอัตโนมัติ</button>
+        <button type="button" onClick={() => { setStationUploadKind('manual'); setRecords([]); setError(null); }} className={`px-3 py-2 rounded-md ${stationUploadKind === 'manual' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'}`}>จุดตรวจวัด</button>
+      </div>}
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={downloadTemplate} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5"><Download className="w-3.5 h-3.5" />ดาวน์โหลดไฟล์ตัวอย่าง</button>
         <button type="button" onClick={() => inputRef.current?.click()} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold flex items-center gap-1.5"><FileSpreadsheet className="w-3.5 h-3.5" />เลือกไฟล์ Excel/CSV</button>
@@ -278,6 +337,13 @@ export default function FactoryDataUpload({ onImportFactory, onImportStation, on
         </button>}
         <input ref={inputRef} type="file" accept=".xlsx,.csv,.tsv" className="hidden" onChange={(e) => void readFile(e.target.files?.[0])} />
       </div>
+      <p className="text-[11px] text-sky-700">
+        {kind === 'factory'
+          ? 'ไฟล์ตัวอย่างใช้โครงสร้าง E-Report แบบหนึ่งพารามิเตอร์ต่อหนึ่งแถว เหมือนรายงานจริงจากระบบ'
+          : stationUploadKind === 'automatic'
+            ? 'ไฟล์ตัวอย่างใช้หัวคอลัมน์ตรงกับไฟล์ข้อมูลคุณภาพน้ำอัตโนมัติ'
+            : 'ไฟล์ตัวอย่างใช้หัวคอลัมน์ตรงกับไฟล์ข้อมูลจุดตรวจวัดภาคสนาม'}
+      </p>
       <p className="text-[11px] text-slate-500">ข้อมูลที่ยืนยันนำเข้าจะเก็บในพื้นที่จัดเก็บของเว็บไซต์บนเบราว์เซอร์เครื่องนี้ ไม่ได้เขียนกลับลงไฟล์ Excel หรือไฟล์ในโปรเจกต์</p>
       <div onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); void readFile(e.dataTransfer.files[0]); }} className="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center text-xs text-slate-500">ลากไฟล์มาวางที่นี่ หรือกด “เลือกไฟล์ Excel/CSV”</div>
       {error && <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg p-3 text-xs flex gap-2"><X className="w-4 h-4 shrink-0" />{error}</div>}
