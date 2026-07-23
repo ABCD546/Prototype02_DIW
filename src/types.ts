@@ -14,9 +14,50 @@ export interface Factory {
   dischargeBOD: number; // mg/L
   dischargeCOD: number; // mg/L
   dischargeEC: number;  // uS/cm
+  pH?: number;
+  tss?: number;
+  tds?: number;
   dischargeFecal?: number; // MPN/100ml
   dischargeNitrogen?: number; // mg/L
   status: 'Compliant' | 'Violation';
+  /** มีผลตรวจจริงที่อัปโหลดแล้ว; false = แสดงเฉพาะข้อมูลทะเบียน/พิกัด */
+  hasMeasurementData?: boolean;
+  inspectionCount?: number;
+  isAnnualSummary?: boolean;
+  testedParameters?: string[];
+  inspectionTimestamp?: string;
+  collectionPoint?: string;
+}
+
+export interface FactoryImportRecord {
+  factoryId: string;
+  name: string;
+  industryType: string;
+  lat: number | null;
+  lon: number | null;
+  timestamp: string;
+  pH: number | null;
+  bod: number | null;
+  cod: number | null;
+  tss: number | null;
+  tds: number | null;
+  operationId?: string;
+  province?: string;
+  collectionPoint?: string;
+  extraParameters?: Record<string, number | null>;
+  testedParameters?: string[];
+}
+
+export interface StationImportRecord {
+  stationName: string;
+  stationCode?: string;
+  lat: number | null;
+  lon: number | null;
+  timestamp: string;
+  pH: number | null;
+  do: number | null;
+  ec: number | null;
+  temp: number | null;
 }
 
 export interface Checkpoint {
@@ -24,6 +65,12 @@ export interface Checkpoint {
   name: string; // display name of the station
   lat: number;
   lon: number;
+  code?: string;
+  stationType?: 'automatic' | 'manual' | 'historical' | 'uploaded';
+  riverName?: string;
+  province?: string;
+  /** false means this entry is a location-only marker. */
+  hasMeasurementData?: boolean;
 }
 
 // One row of historical data read from a station's CSV file.
@@ -33,61 +80,4 @@ export interface Checkpoint {
 export interface CheckpointReading {
   timestamp: string; // raw date-time string from the file, e.g. "4/2/2023 9:00"
   values: Record<string, number | null>;
-}
-
-export interface Scenario {
-  id: number;
-  name: string;
-  description: string;
-  riverFlowRate: number; // Q_river in m3/day
-  riverBOD: number;  // Upstream BOD mg/L
-  riverCOD: number;  // Upstream COD mg/L
-  riverFecal: number; // Upstream Fecal Coliform
-  riverNitrogen: number; // Upstream Nitrogen
-  riverEC: number; // Upstream Electrical Conductivity uS/cm
-  systemJudgment: string;
-  defenseStatus: string;
-  alertLevel: 'safe' | 'warning' | 'critical';
-  factoriesOverride: Record<string, Partial<Factory>>;
-  timestamp?: string;
-  dateLabel?: string;
-}
-
-export interface SimulationResult {
-  mixedBOD: number;
-  mixedCOD: number;
-  mixedEC: number;
-  mixedFecal: number;
-  mixedNitrogen: number;
-  diagnostic: string;
-  isIndustryToBlame: boolean;
-  violatedFactories: string[];
-}
-
-export interface FactoryRisk {
-  factoryId: string;
-  name: string;
-  riskScore: number;
-  substances: string[];
-  isViolating: boolean;
-}
-
-export interface AllowedDischarge {
-  factoryId: string;
-  name: string;
-  distanceToCheckpointKm: number;
-  currentBOD: number;
-  currentCOD: number;
-  maxAllowedBOD: number; // mg/L ที่โรงงานนี้ "ปล่อยได้สูงสุด" โดยจุดตรวจยังไม่เกิน DIW_STANDARDS.RIVER_BOD_MAX
-  maxAllowedCOD: number; // mg/L ที่โรงงานนี้ "ปล่อยได้สูงสุด" โดยจุดตรวจยังไม่เกิน DIW_STANDARDS.RIVER_COD_MAX
-  isOverBOD: boolean;
-  isOverCOD: boolean;
-}
-
-export interface SourceAttribution {
-  factoryProb: number;
-  residentialProb: number;
-  agricultureProb: number;
-  dominantSource: 'factories' | 'residential' | 'agriculture' | 'normal';
-  factoriesRisk: FactoryRisk[];
 }
