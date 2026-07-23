@@ -124,6 +124,25 @@ async function enrichFactoryLocations(records: FactoryImportRecord[]) {
   });
 }
 
+function assertNoFutureTimestamps(records: (FactoryImportRecord | StationImportRecord)[]) {
+  const now = Date.now();
+  const futureRecords = records.filter((record) => {
+    const timestamp = new Date(record.timestamp).getTime();
+    return Number.isFinite(timestamp) && timestamp > now;
+  });
+  if (!futureRecords.length) return;
+
+  const examples = futureRecords.slice(0, 3).map((record) => {
+    const id = 'factoryId' in record ? record.factoryId : (record.stationCode || record.stationName);
+    const date = new Date(record.timestamp).toLocaleString('th-TH');
+    return `${id} (${date})`;
+  });
+  const remaining = futureRecords.length - examples.length;
+  throw new Error(
+    `ไม่สามารถนำเข้าข้อมูลวันที่ในอนาคตได้ พบ ${futureRecords.length.toLocaleString()} รายการ: ${examples.join(', ')}${remaining > 0 ? ` และอีก ${remaining.toLocaleString()} รายการ` : ''}`
+  );
+}
+
 export function parseRows(rows: unknown[][], kind: UploadKind): FactoryImportRecord[] | StationImportRecord[] {
   if (rows.length < 2) throw new Error('ไฟล์ยังไม่มีแถวข้อมูล กรุณาใส่ข้อมูลใต้หัวตารางอย่างน้อย 1 แถว');
   if (kind === 'factory') {
@@ -203,6 +222,7 @@ export default function FactoryDataUpload({ onImportFactory, onImportStation, on
         rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1, raw: false }) as unknown[][];
       } else rows = rowsFromCsv(await file.text());
       const parsed = parseRows(rows, kind);
+      assertNoFutureTimestamps(parsed);
       setRecords(kind === 'factory' ? await enrichFactoryLocations(parsed as FactoryImportRecord[]) : parsed);
     } catch (err) { setRecords([]); setError(err instanceof Error ? err.message : 'อ่านไฟล์ไม่สำเร็จ'); }
   };
